@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::PgPool;
+use tracing::error;
 
 use crate::{
     errors::ApiError,
@@ -77,7 +78,10 @@ pub async fn load_snapshot(pool: &PgPool) -> Result<Snapshot, ApiError> {
     )
     .fetch_one(pool)
     .await
-    .map_err(|err| ApiError::internal(format!("failed to read snapshot: {err}")))?;
+    .map_err(|err| {
+        error!("failed to read snapshot from database: {err}");
+        ApiError::internal("failed to read snapshot".to_string())
+    })?;
 
     Ok(Snapshot {
         version: row.0,
@@ -94,15 +98,18 @@ pub async fn update_namespace(
     namespace: Namespace,
     payload: NamespacePayload,
 ) -> Result<(Snapshot, UpdateEvent), ApiError> {
-    let mut transaction = pool
-        .begin()
-        .await
-        .map_err(|err| ApiError::internal(format!("failed to start transaction: {err}")))?;
+    let mut transaction = pool.begin().await.map_err(|err| {
+        error!("failed to start transaction: {err}");
+        ApiError::internal("failed to start transaction".to_string())
+    })?;
 
     let current = sqlx::query_as::<_, (i64,)>("SELECT version FROM sync_document WHERE id = 1")
         .fetch_one(&mut *transaction)
         .await
-        .map_err(|err| ApiError::internal(format!("failed to read current version: {err}")))?
+        .map_err(|err| {
+            error!("failed to read current version: {err}");
+            ApiError::internal("failed to read current version".to_string())
+        })?
         .0;
 
     if let Some(expected) = payload.expected_version
@@ -121,36 +128,60 @@ pub async fn update_namespace(
 
     let query = match namespace {
         Namespace::AppState => {
-            "UPDATE sync_document SET app_state = $1, version = $2, updated_at = $3 WHERE id = 1"
+            "UPDATE sync_document SET app_state = $1, version = $2, updated_at = $3 WHERE id = 1 \
+             RETURNING version, updated_at, app_state, playlists, provider_configuration, settings"
         }
         Namespace::Playlists => {
-            "UPDATE sync_document SET playlists = $1, version = $2, updated_at = $3 WHERE id = 1"
+            "UPDATE sync_document SET playlists = $1, version = $2, updated_at = $3 WHERE id = 1 \
+             RETURNING version, updated_at, app_state, playlists, provider_configuration, settings"
         }
         Namespace::ProviderConfiguration => {
-            "UPDATE sync_document SET provider_configuration = $1, version = $2, updated_at = $3 WHERE id = 1"
+            "UPDATE sync_document SET provider_configuration = $1, version = $2, updated_at = $3 WHERE id = 1 \
+             RETURNING version, updated_at, app_state, playlists, provider_configuration, settings"
         }
         Namespace::Settings => {
-            "UPDATE sync_document SET settings = $1, version = $2, updated_at = $3 WHERE id = 1"
+            "UPDATE sync_document SET settings = $1, version = $2, updated_at = $3 WHERE id = 1 \
+             RETURNING version, updated_at, app_state, playlists, provider_configuration, settings"
         }
         Namespace::Snapshot => unreachable!(),
     };
 
-    sqlx::query(query)
-        .bind(data)
-        .bind(new_version)
-        .bind(updated_at)
-        .execute(&mut *transaction)
-        .await
-        .map_err(|err| ApiError::internal(format!("failed to update snapshot: {err}")))?;
+    let row = sqlx::query_as::<
+        _,
+        (
+            i64,
+            DateTime<Utc>,
+            serde_json::Value,
+            serde_json::Value,
+            serde_json::Value,
+            serde_json::Value,
+        ),
+    >(query)
+    .bind(data)
+    .bind(new_version)
+    .bind(updated_at)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(|err| {
+        error!("failed to update snapshot: {err}");
+        ApiError::internal("failed to update snapshot".to_string())
+    })?;
 
-    transaction
-        .commit()
-        .await
-        .map_err(|err| ApiError::internal(format!("failed to commit update: {err}")))?;
+    transaction.commit().await.map_err(|err| {
+        error!("failed to commit update: {err}");
+        ApiError::internal("failed to commit update".to_string())
+    })?;
 
-    let snapshot = load_snapshot(pool).await?;
+    let snapshot = Snapshot {
+        version: row.0,
+        updated_at: row.1,
+        app_state: row.2,
+        playlists: row.3,
+        provider_configuration: row.4,
+        settings: row.5,
+    };
     let event = UpdateEvent {
-        event_type: "state_updated",
+        event_type: "state_updated".to_string(),
         namespace,
         version: new_version,
         updated_at,
@@ -164,15 +195,18 @@ pub async fn replace_snapshot(
     pool: &PgPool,
     payload: SnapshotPayload,
 ) -> Result<(Snapshot, UpdateEvent), ApiError> {
-    let mut transaction = pool
-        .begin()
-        .await
-        .map_err(|err| ApiError::internal(format!("failed to start transaction: {err}")))?;
+    let mut transaction = pool.begin().await.map_err(|err| {
+        error!("failed to start transaction: {err}");
+        ApiError::internal("failed to start transaction".to_string())
+    })?;
 
     let current = sqlx::query_as::<_, (i64,)>("SELECT version FROM sync_document WHERE id = 1")
         .fetch_one(&mut *transaction)
         .await
-        .map_err(|err| ApiError::internal(format!("failed to read current version: {err}")))?
+        .map_err(|err| {
+            error!("failed to read current version: {err}");
+            ApiError::internal("failed to read current version".to_string())
+        })?
         .0;
 
     if let Some(expected) = payload.expected_version
@@ -187,7 +221,17 @@ pub async fn replace_snapshot(
     let new_version = current + 1;
     let updated_at = Utc::now();
 
-    sqlx::query(
+    let row = sqlx::query_as::<
+        _,
+        (
+            i64,
+            DateTime<Utc>,
+            serde_json::Value,
+            serde_json::Value,
+            serde_json::Value,
+            serde_json::Value,
+        ),
+    >(
         r#"
         UPDATE sync_document
         SET
@@ -198,6 +242,7 @@ pub async fn replace_snapshot(
             version = $5,
             updated_at = $6
         WHERE id = 1
+        RETURNING version, updated_at, app_state, playlists, provider_configuration, settings
         "#,
     )
     .bind(payload.app_state)
@@ -206,18 +251,28 @@ pub async fn replace_snapshot(
     .bind(payload.settings)
     .bind(new_version)
     .bind(updated_at)
-    .execute(&mut *transaction)
+    .fetch_one(&mut *transaction)
     .await
-    .map_err(|err| ApiError::internal(format!("failed to write snapshot: {err}")))?;
+    .map_err(|err| {
+        error!("failed to write snapshot: {err}");
+        ApiError::internal("failed to write snapshot".to_string())
+    })?;
 
-    transaction
-        .commit()
-        .await
-        .map_err(|err| ApiError::internal(format!("failed to commit update: {err}")))?;
+    transaction.commit().await.map_err(|err| {
+        error!("failed to commit update: {err}");
+        ApiError::internal("failed to commit update".to_string())
+    })?;
 
-    let snapshot = load_snapshot(pool).await?;
+    let snapshot = Snapshot {
+        version: row.0,
+        updated_at: row.1,
+        app_state: row.2,
+        playlists: row.3,
+        provider_configuration: row.4,
+        settings: row.5,
+    };
     let event = UpdateEvent {
-        event_type: "state_updated",
+        event_type: "state_updated".to_string(),
         namespace: Namespace::Snapshot,
         version: new_version,
         updated_at,

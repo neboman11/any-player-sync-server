@@ -10,7 +10,6 @@ mod ws;
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tracing::info;
@@ -31,15 +30,22 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env()?;
 
-    let pool = PgPool::connect(&config.database_url)
-        .await
-        .context("failed to connect to postgres database")?;
+    let pool = PgPool::connect(&config.database_url).await.map_err(|err| {
+        anyhow::anyhow!(
+            "failed to connect to postgres ({}): {err}",
+            config.database_url_safe
+        )
+    })?;
     ensure_schema(&pool).await?;
 
+    // A capacity of 512 messages is used for the broadcast channel. Slow or
+    // disconnected WebSocket clients that fall more than 512 messages behind will
+    // receive a RecvError::Lagged error and must refresh from a full snapshot on
+    // reconnection.
     let (updates_tx, _) = broadcast::channel(512);
     let state = Arc::new(AppContext { pool, updates_tx });
 
-    let app = build_router(state);
+    let app = build_router(state, config.cors_allowed_origins, config.max_body_size);
 
     info!(address = %config.bind_address, "sync server listening");
     let listener = tokio::net::TcpListener::bind(config.bind_address).await?;

@@ -101,13 +101,19 @@ All errors follow:
 
 ## Security notes (for production)
 
-Current backend is intentionally minimal and does not enforce auth.
+Current backend is intentionally minimal, does not enforce auth, and uses a single global sync state. On its own it is **not safe to expose** to any untrusted network.
 
-Before production rollout, add:
+You MUST only:
+- run this backend directly on `localhost`/a strictly trusted local network **or**
+- place it behind an authenticated, access-controlled reverse proxy that enforces API authentication and per-user account scoping.
+
+For any non-localhost or production-like deployment, you MUST ensure at least:
 - TLS termination
-- API authentication (token/session)
-- Per-user account scoping (separate rows/documents per user)
-- Rate limiting and request size limits
+- API authentication (token/session or equivalent) enforced either by the backend or the proxy
+- Per-user account scoping (separate rows/documents per user or tenant, not a single global state)
+- Rate limiting and request size limits (set `MAX_BODY_SIZE` and proxy-level limits)
+
+To restrict allowed CORS origins, set the `CORS_ALLOWED_ORIGINS` environment variable to a comma-separated list of allowed origins (e.g. `http://localhost:3000,http://localhost:4200`). If unset, all origins are permitted.
 
 ## Suggested app abstractions
 

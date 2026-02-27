@@ -1,6 +1,7 @@
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
+use tracing::error;
 
 use crate::models::UpdateEvent;
 
@@ -15,10 +16,15 @@ pub async fn handle_ws_connection(
             result = updates.recv() => {
                 match result {
                     Ok(event) => {
-                        if let Ok(message) = serde_json::to_string(&event)
-                            && sender.send(Message::Text(message.into())).await.is_err()
-                        {
-                            break;
+                        match serde_json::to_string(&event) {
+                            Ok(message) => {
+                                if sender.send(Message::Text(message.into())).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Err(err) => {
+                                error!("Failed to serialize UpdateEvent for WebSocket: {err}");
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,

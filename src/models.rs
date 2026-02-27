@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::errors::ApiError;
 
@@ -49,7 +49,7 @@ pub struct HealthResponse {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct UpdateEvent {
-    pub event_type: &'static str,
+    pub event_type: String,
     pub namespace: Namespace,
     pub version: i64,
     pub updated_at: DateTime<Utc>,
@@ -102,7 +102,7 @@ pub fn namespace_data(snapshot: &Snapshot, namespace: Namespace) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use super::{namespace_data, Namespace, Snapshot};
+    use super::{Namespace, Snapshot, namespace_data};
     use chrono::Utc;
     use serde_json::json;
 
