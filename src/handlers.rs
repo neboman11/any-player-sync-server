@@ -33,10 +33,10 @@ pub async fn get_snapshot(
 ) -> Result<Response, ApiError> {
     let snapshot = load_snapshot(&state.pool).await?;
 
-    if let Some(since_version) = query.since_version {
-        if snapshot.version <= since_version {
-            return Ok(StatusCode::NOT_MODIFIED.into_response());
-        }
+    if let Some(since_version) = query.since_version
+        && snapshot.version <= since_version
+    {
+        return Ok(StatusCode::NOT_MODIFIED.into_response());
     }
 
     Ok(Json(snapshot).into_response())

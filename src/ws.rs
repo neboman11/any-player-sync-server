@@ -15,10 +15,10 @@ pub async fn handle_ws_connection(
             result = updates.recv() => {
                 match result {
                     Ok(event) => {
-                        if let Ok(message) = serde_json::to_string(&event) {
-                            if sender.send(Message::Text(message.into())).await.is_err() {
-                                break;
-                            }
+                        if let Ok(message) = serde_json::to_string(&event)
+                            && sender.send(Message::Text(message.into())).await.is_err()
+                        {
+                            break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => continue,

@@ -105,12 +105,12 @@ pub async fn update_namespace(
         .map_err(|err| ApiError::internal(format!("failed to read current version: {err}")))?
         .0;
 
-    if let Some(expected) = payload.expected_version {
-        if expected != current {
-            return Err(ApiError::conflict(format!(
-                "expected version {expected}, but current version is {current}"
-            )));
-        }
+    if let Some(expected) = payload.expected_version
+        && expected != current
+    {
+        return Err(ApiError::conflict(format!(
+            "expected version {expected}, but current version is {current}"
+        )));
     }
 
     let source_client_id = payload.client_id.clone();
@@ -175,12 +175,12 @@ pub async fn replace_snapshot(
         .map_err(|err| ApiError::internal(format!("failed to read current version: {err}")))?
         .0;
 
-    if let Some(expected) = payload.expected_version {
-        if expected != current {
-            return Err(ApiError::conflict(format!(
-                "expected version {expected}, but current version is {current}"
-            )));
-        }
+    if let Some(expected) = payload.expected_version
+        && expected != current
+    {
+        return Err(ApiError::conflict(format!(
+            "expected version {expected}, but current version is {current}"
+        )));
     }
 
     let source_client_id = payload.client_id.clone();
