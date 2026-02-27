@@ -27,7 +27,6 @@ jobs:
 
             - name: Cargo fmt check
               run: cargo fmt --all -- --check
-              continue-on-error: ${{ contains(github.event.head_commit.message, '[skip-format]') }}
 
             - name: Cargo clippy
               run: cargo clippy --all-targets --all-features -- -D warnings
