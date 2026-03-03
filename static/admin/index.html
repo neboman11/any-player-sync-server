@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Any Player Sync Admin</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 24px;
+        max-width: 960px;
+      }
+      h1,
+      h2 {
+        margin-bottom: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 8px;
+        flex-wrap: wrap;
+      }
+      input,
+      button {
+        padding: 8px;
+        font-size: 14px;
+      }
+      input {
+        min-width: 220px;
+      }
+      .user {
+        border: 1px solid #ddd;
+        padding: 12px;
+        margin-bottom: 12px;
+        border-radius: 6px;
+      }
+      .token {
+        margin-left: 12px;
+        font-size: 13px;
+      }
+      .error {
+        color: #b00020;
+      }
+      .success {
+        color: #0b7a0b;
+      }
+      code {
+        background: #f4f4f4;
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Any Player Sync Admin</h1>
+    <p>Use an admin bearer token to manage users and tokens.</p>
+
+    <div class="row">
+      <input id="adminToken" type="password" placeholder="Admin bearer token" />
+      <button id="saveToken">Save Token</button>
+      <button id="loadUsers">Load Users</button>
+      <button id="logout">Log Out</button>
+    </div>
+
+    <h2>Create User</h2>
+    <div class="row">
+      <input id="newUserName" type="text" placeholder="User name" />
+      <label><input id="newUserAdmin" type="checkbox" /> Admin</label>
+      <button id="createUser">Create User</button>
+    </div>
+
+    <p id="status"></p>
+    <div id="users"></div>
+
+    <script>
+      const tokenInput = document.getElementById("adminToken");
+      const status = document.getElementById("status");
+      const usersContainer = document.getElementById("users");
+
+      tokenInput.value = localStorage.getItem("any-player-admin-token") || "";
+      if (!tokenInput.value.trim()) {
+        window.location.assign("/admin/login");
+      }
+
+      function setStatus(message, isError = false) {
+        status.textContent = message;
+        status.className = isError ? "error" : "success";
+      }
+
+      function authHeaders() {
+        const token = tokenInput.value.trim();
+        return {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        };
+      }
+
+      async function api(path, options = {}) {
+        const response = await fetch(path, {
+          ...options,
+          headers: {
+            ...authHeaders(),
+            ...(options.headers || {}),
+          },
+        });
+
+        if (!response.ok) {
+          let message = `Request failed (${response.status})`;
+          try {
+            const body = await response.json();
+            message = body?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+
+        if (response.status === 204) {
+          return null;
+        }
+
+        return response.json();
+      }
+
+      function renderUsers(users) {
+        usersContainer.innerHTML = "";
+
+        for (const user of users) {
+          const userEl = document.createElement("div");
+          userEl.className = "user";
+
+          const disabledText = user.disabled_at ? " (disabled)" : "";
+          userEl.innerHTML = `
+        <div><strong>${user.name}</strong>${disabledText} ${user.is_admin ? "[admin]" : ""}</div>
+        <div class="row" style="margin-top: 8px;">
+          <button data-action="create-token" data-user-id="${user.id}">Create Token</button>
+          <button data-action="toggle-disable" data-user-id="${user.id}" data-disabled="${user.disabled_at ? "true" : "false"}">
+            ${user.disabled_at ? "Enable User" : "Disable User"}
+          </button>
+        </div>
+        <div><strong>Tokens</strong></div>
+      `;
+
+          const tokensEl = document.createElement("div");
+          if (!user.tokens || user.tokens.length === 0) {
+            tokensEl.innerHTML = '<div class="token">No tokens</div>';
+          } else {
+            for (const token of user.tokens) {
+              const tokenEl = document.createElement("div");
+              const revoked = token.revoked_at ? "revoked" : "active";
+              tokenEl.className = "token";
+              tokenEl.innerHTML = `
+            <span><code>${token.token_prefix}…</code> ${token.label} (${revoked})</span>
+            ${token.revoked_at ? "" : `<button data-action="revoke-token" data-token-id="${token.id}">Revoke</button>`}
+          `;
+              tokensEl.appendChild(tokenEl);
+            }
+          }
+
+          userEl.appendChild(tokensEl);
+          usersContainer.appendChild(userEl);
+        }
+      }
+
+      async function loadUsers() {
+        try {
+          const users = await api("/v1/admin/users", { method: "GET" });
+          renderUsers(users);
+          setStatus(`Loaded ${users.length} user(s).`);
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      }
+
+      document.getElementById("saveToken").addEventListener("click", () => {
+        localStorage.setItem("any-player-admin-token", tokenInput.value.trim());
+        setStatus("Admin token saved in browser localStorage.");
+      });
+
+      document.getElementById("loadUsers").addEventListener("click", () => {
+        loadUsers();
+      });
+
+      document.getElementById("logout").addEventListener("click", () => {
+        localStorage.removeItem("any-player-admin-token");
+        window.location.assign("/admin/login");
+      });
+
+      document
+        .getElementById("createUser")
+        .addEventListener("click", async () => {
+          const name = document.getElementById("newUserName").value.trim();
+          const isAdmin = document.getElementById("newUserAdmin").checked;
+
+          if (!name) {
+            setStatus("User name is required.", true);
+            return;
+          }
+
+          try {
+            const created = await api("/v1/admin/users", {
+              method: "POST",
+              body: JSON.stringify({ name, is_admin: isAdmin }),
+            });
+            setStatus(`Created user ${created.name}.`);
+            document.getElementById("newUserName").value = "";
+            await loadUsers();
+          } catch (error) {
+            setStatus(error.message, true);
+          }
+        });
+
+      usersContainer.addEventListener("click", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLButtonElement)) {
+          return;
+        }
+
+        const action = target.getAttribute("data-action");
+        if (!action) {
+          return;
+        }
+
+        try {
+          if (action === "create-token") {
+            const userId = target.getAttribute("data-user-id");
+            const label = window.prompt("Token label", "manual") || "manual";
+            const result = await api(`/v1/admin/users/${userId}/tokens`, {
+              method: "POST",
+              body: JSON.stringify({ label }),
+            });
+            window.alert(
+              `Token created. Copy this now; it will not be shown again:\n\n${result.token}`,
+            );
+            setStatus(`Created token for user ${userId}.`);
+          }
+
+          if (action === "revoke-token") {
+            const tokenId = target.getAttribute("data-token-id");
+            await api(`/v1/admin/tokens/${tokenId}`, { method: "DELETE" });
+            setStatus(`Revoked token ${tokenId}.`);
+          }
+
+          if (action === "toggle-disable") {
+            const userId = target.getAttribute("data-user-id");
+            const disabled = target.getAttribute("data-disabled") === "true";
+            await api(`/v1/admin/users/${userId}/disabled`, {
+              method: "PATCH",
+              body: JSON.stringify({ disabled: !disabled }),
+            });
+            setStatus(`${!disabled ? "Disabled" : "Enabled"} user ${userId}.`);
+          }
+
+          await loadUsers();
+        } catch (error) {
+          setStatus(error.message, true);
+        }
+      });
+
+      loadUsers();
+    </script>
+  </body>
+</html>

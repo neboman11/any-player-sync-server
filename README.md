@@ -28,6 +28,8 @@ Environment variables:
 - `DB_PASSWORD` (default: `postgres`)
 - `DB_NAME` (default: `any_player_sync`)
 - `DB_SSLMODE` (default: `prefer`)
+- `ADMIN_BOOTSTRAP_NAME` (default: `admin`)
+- `ADMIN_BOOTSTRAP_TOKEN` (optional; if set, this token is activated for the bootstrap admin account)
 
 Examples:
 
@@ -39,8 +41,23 @@ DB_USER=postgres \
 DB_PASSWORD=postgres \
 DB_NAME=any_player_sync \
 DB_SSLMODE=disable \
+ADMIN_BOOTSTRAP_TOKEN=replace-with-strong-token \
 cargo run
 ```
+
+## Authentication and user isolation
+
+All `/v1/*` sync endpoints require:
+
+```http
+Authorization: Bearer <token>
+```
+
+Each token is tied to a user. Snapshots and namespace updates are isolated per user, so one user's token cannot read or modify another user's sync state.
+
+WebSocket auth:
+- Preferred: `Authorization: Bearer <token>`
+- Browser fallback: `GET /v1/ws?token=<token>`
 
 ## API summary
 
@@ -105,6 +122,18 @@ Message format:
   "source_client_id": "desktop-main"
 }
 ```
+
+## Admin UI
+
+- `GET /admin` serves a basic admin web UI.
+- Admin API endpoints are under `/v1/admin/*` and require an **admin** bearer token.
+
+Supported admin operations:
+- List users/tokens
+- Create users
+- Create tokens
+- Revoke tokens
+- Enable/disable users
 
 ## Integration guide
 

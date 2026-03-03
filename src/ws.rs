@@ -3,11 +3,12 @@ use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
 use tracing::error;
 
-use crate::models::UpdateEvent;
+use crate::models::UserScopedUpdateEvent;
 
 pub async fn handle_ws_connection(
     stream: WebSocket,
-    mut updates: broadcast::Receiver<UpdateEvent>,
+    user_id: i64,
+    mut updates: broadcast::Receiver<UserScopedUpdateEvent>,
 ) {
     let (mut sender, mut receiver) = stream.split();
 
@@ -15,8 +16,12 @@ pub async fn handle_ws_connection(
         tokio::select! {
             result = updates.recv() => {
                 match result {
-                    Ok(event) => {
-                        match serde_json::to_string(&event) {
+                    Ok(user_event) => {
+                        if user_event.user_id != user_id {
+                            continue;
+                        }
+
+                        match serde_json::to_string(&user_event.event) {
                             Ok(message) => {
                                 if sender.send(Message::Text(message.into())).await.is_err() {
                                     break;

@@ -1,6 +1,11 @@
 use std::sync::Arc;
 
-use axum::{Router, extract::DefaultBodyLimit, http::HeaderValue, routing::get};
+use axum::{
+    Router,
+    extract::DefaultBodyLimit,
+    http::{HeaderValue, Method, header},
+    routing::{get, patch, post},
+};
 use tower_http::{
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
@@ -25,11 +30,38 @@ pub fn build_router(
             .iter()
             .filter_map(|o| HeaderValue::from_str(o).ok())
             .collect();
-        CorsLayer::new().allow_origin(AllowOrigin::list(origins))
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(origins))
+            .allow_methods([
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+            ])
+            .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
     };
 
     Router::new()
         .route("/health", get(handlers::health))
+        .route("/admin/login", get(handlers::admin_login))
+        .route("/admin", get(handlers::admin_index))
+        .route(
+            "/v1/admin/users",
+            get(handlers::admin_list_users).post(handlers::admin_create_user),
+        )
+        .route(
+            "/v1/admin/users/:user_id/tokens",
+            post(handlers::admin_create_token),
+        )
+        .route(
+            "/v1/admin/users/:user_id/disabled",
+            patch(handlers::admin_set_user_disabled),
+        )
+        .route(
+            "/v1/admin/tokens/:token_id",
+            axum::routing::delete(handlers::admin_revoke_token),
+        )
         .route(
             "/v1/snapshot",
             get(handlers::get_snapshot).put(handlers::put_snapshot),
