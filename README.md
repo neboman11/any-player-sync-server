@@ -56,8 +56,8 @@ Authorization: Bearer <token>
 Each token is tied to a user. Snapshots and namespace updates are isolated per user, so one user's token cannot read or modify another user's sync state.
 
 WebSocket auth:
-- Preferred: `Authorization: Bearer <token>`
-- Browser fallback: `GET /v1/ws?token=<token>`
+- Preferred: `Authorization: Bearer <token>` header
+- Browser fallback: `GET /v1/ws?token=<token>` (**avoid in production** — the token appears in access logs, browser history, and reverse-proxy logs)
 
 ## API summary
 

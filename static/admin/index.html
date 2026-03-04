@@ -80,6 +80,7 @@
       tokenInput.value = sessionStorage.getItem("any-player-admin-token") || "";
       if (!tokenInput.value.trim()) {
         window.location.assign("/admin/login");
+        throw new Error("Redirecting to /admin/login due to missing admin token");
       }
 
       function setStatus(message, isError = false) {
