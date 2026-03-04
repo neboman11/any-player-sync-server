@@ -13,6 +13,30 @@ pub struct ApiError {
 }
 
 impl ApiError {
+    pub fn unauthorized(message: String) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            code: "unauthorized",
+            message,
+        }
+    }
+
+    pub fn forbidden(message: String) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message,
+        }
+    }
+
+    pub fn not_found(message: String) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            code: "not_found",
+            message,
+        }
+    }
+
     pub fn bad_request(message: String) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,

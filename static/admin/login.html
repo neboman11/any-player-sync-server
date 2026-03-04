@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Any Player Sync Admin Login</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 24px;
+        max-width: 480px;
+      }
+      h1 {
+        margin-bottom: 8px;
+      }
+      p {
+        margin-bottom: 12px;
+      }
+      input,
+      button {
+        padding: 8px;
+        font-size: 14px;
+      }
+      input {
+        min-width: 260px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        margin-bottom: 10px;
+        flex-wrap: wrap;
+      }
+      .error {
+        color: #b00020;
+      }
+      .success {
+        color: #0b7a0b;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Admin Login</h1>
+    <p>Enter an admin bearer token to access the Any Player Sync admin UI.</p>
+
+    <div class="row">
+      <input
+        id="token"
+        type="password"
+        placeholder="Admin bearer token"
+        autofocus
+      />
+      <button id="login">Log In</button>
+    </div>
+
+    <p id="status"></p>
+
+    <script>
+      const tokenInput = document.getElementById("token");
+      const loginButton = document.getElementById("login");
+      const status = document.getElementById("status");
+
+      function setStatus(message, isError = false) {
+        status.textContent = message;
+        status.className = isError ? "error" : "success";
+      }
+
+      async function validateAdminToken(token) {
+        const response = await fetch("/v1/admin/users", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+
+        if (!response.ok) {
+          let message = `Login failed (${response.status})`;
+          try {
+            const payload = await response.json();
+            message = payload?.error?.message || message;
+          } catch (_) {}
+          throw new Error(message);
+        }
+      }
+
+      async function login() {
+        const token = tokenInput.value.trim();
+        if (!token) {
+          setStatus("Token is required.", true);
+          return;
+        }
+
+        loginButton.disabled = true;
+        setStatus("Validating token...");
+
+        try {
+          await validateAdminToken(token);
+          sessionStorage.setItem("any-player-admin-token", token);
+          setStatus("Login successful. Redirecting...");
+          window.location.assign("/admin");
+        } catch (error) {
+          setStatus(error.message || "Login failed.", true);
+        } finally {
+          loginButton.disabled = false;
+        }
+      }
+
+      loginButton.addEventListener("click", () => {
+        login();
+      });
+
+      tokenInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          login();
+        }
+      });
+    </script>
+  </body>
+</html>

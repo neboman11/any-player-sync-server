@@ -56,6 +56,13 @@ pub struct UpdateEvent {
     pub source_client_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AuthenticatedUser {
+    pub id: i64,
+    pub name: String,
+    pub is_admin: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum Namespace {
@@ -83,6 +90,71 @@ impl Namespace {
 #[derive(Debug, Deserialize)]
 pub struct SnapshotQuery {
     pub since_version: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WsQuery {
+    pub token: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TokenInfo {
+    pub id: i64,
+    pub label: String,
+    pub token_prefix: String,
+    pub created_at: DateTime<Utc>,
+    pub last_used_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UserSummary {
+    pub id: i64,
+    pub name: String,
+    pub is_admin: bool,
+    pub created_at: DateTime<Utc>,
+    pub disabled_at: Option<DateTime<Utc>>,
+    pub tokens: Vec<TokenInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UserCreatedResponse {
+    pub id: i64,
+    pub name: String,
+    pub is_admin: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TokenCreatedResponse {
+    pub id: i64,
+    pub user_id: i64,
+    pub label: String,
+    pub token_prefix: String,
+    pub token: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateUserRequest {
+    pub name: String,
+    #[serde(default)]
+    pub is_admin: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTokenRequest {
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetUserDisabledRequest {
+    pub disabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct OperationResponse {
+    pub ok: bool,
 }
 
 pub fn namespace_data(snapshot: &Snapshot, namespace: Namespace) -> Value {

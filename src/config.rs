@@ -11,6 +11,9 @@ pub struct AppConfig {
     pub cors_allowed_origins: Vec<String>,
     /// Maximum request body size in bytes (default: 1 MiB, configurable via `MAX_BODY_SIZE`).
     pub max_body_size: usize,
+    /// Optional bootstrap admin user name and token. When token is set, the user and token are ensured at startup.
+    pub admin_bootstrap_name: String,
+    pub admin_bootstrap_token: Option<String>,
 }
 
 impl AppConfig {
@@ -43,6 +46,16 @@ impl AppConfig {
             .and_then(|v| v.parse().ok())
             .unwrap_or(1024 * 1024); // 1 MiB default
 
+        let admin_bootstrap_name = std::env::var("ADMIN_BOOTSTRAP_NAME")
+            .unwrap_or_else(|_| "admin".to_string())
+            .trim()
+            .to_string();
+
+        let admin_bootstrap_token = std::env::var("ADMIN_BOOTSTRAP_TOKEN")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+
         let bind_address = bind_address
             .parse()
             .with_context(|| format!("invalid BIND_ADDRESS '{bind_address}'"))?;
@@ -53,6 +66,8 @@ impl AppConfig {
             database_url_safe,
             cors_allowed_origins,
             max_body_size,
+            admin_bootstrap_name,
+            admin_bootstrap_token,
         })
     }
 }

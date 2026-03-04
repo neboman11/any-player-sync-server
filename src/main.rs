@@ -11,11 +11,13 @@ mod ws;
 use std::sync::Arc;
 
 use sqlx::PgPool;
-use tokio::sync::broadcast;
 use tracing::info;
 
 use crate::{
-    app::build_router, config::AppConfig, db::ensure_schema, shutdown::shutdown_signal,
+    app::build_router,
+    config::AppConfig,
+    db::{ensure_bootstrap_admin, ensure_schema},
+    shutdown::shutdown_signal,
     state::AppContext,
 };
 
@@ -37,13 +39,14 @@ async fn main() -> anyhow::Result<()> {
         )
     })?;
     ensure_schema(&pool).await?;
+    ensure_bootstrap_admin(
+        &pool,
+        &config.admin_bootstrap_name,
+        config.admin_bootstrap_token.as_deref(),
+    )
+    .await?;
 
-    // A capacity of 512 messages is used for the broadcast channel. Slow or
-    // disconnected WebSocket clients that fall more than 512 messages behind will
-    // receive a RecvError::Lagged error and must refresh from a full snapshot on
-    // reconnection.
-    let (updates_tx, _) = broadcast::channel(512);
-    let state = Arc::new(AppContext { pool, updates_tx });
+    let state = Arc::new(AppContext::new(pool));
 
     let app = build_router(state, config.cors_allowed_origins, config.max_body_size);
 
