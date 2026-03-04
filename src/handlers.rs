@@ -17,8 +17,7 @@ use crate::{
     models::{
         AuthenticatedUser, CreateTokenRequest, CreateUserRequest, HealthResponse, Namespace,
         NamespacePayload, OperationResponse, SetUserDisabledRequest, SnapshotPayload,
-        SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery,
-        namespace_data,
+        SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery, namespace_data,
     },
     state::AppContext,
     ws::handle_ws_connection,
@@ -168,9 +167,7 @@ pub async fn ws_updates(
 ) -> Result<impl IntoResponse, ApiError> {
     let user = authenticate_with_headers_or_query_token(&state, &headers, query.token).await?;
     let updates_rx = state.subscribe_user(user.id).await;
-    Ok(ws.on_upgrade(move |socket| {
-        handle_ws_connection(socket, updates_rx)
-    }))
+    Ok(ws.on_upgrade(move |socket| handle_ws_connection(socket, updates_rx)))
 }
 
 pub async fn admin_index() -> Html<&'static str> {

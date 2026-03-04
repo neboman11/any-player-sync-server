@@ -613,12 +613,10 @@ pub async fn create_user(
     .fetch_optional(pool)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(db_err) = &err {
-            if db_err.code().as_deref() == Some("23505") {
-                return ApiError::conflict(
-                    "a user with that name already exists".to_string(),
-                );
-            }
+        if let sqlx::Error::Database(db_err) = &err
+            && db_err.code().as_deref() == Some("23505")
+        {
+            return ApiError::conflict("a user with that name already exists".to_string());
         }
         error!("failed to create user: {err}");
         ApiError::internal("failed to create user".to_string())

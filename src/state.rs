@@ -55,10 +55,10 @@ impl AppContext {
         if should_cleanup {
             let mut map = self.user_channels.write().await;
 
-            if let Some(tx) = map.get(&user_id) {
-                if tx.receiver_count() == 0 {
-                    map.remove(&user_id);
-                }
+            if let Some(tx) = map.get(&user_id)
+                && tx.receiver_count() == 0
+            {
+                map.remove(&user_id);
             }
         }
     }
