@@ -94,7 +94,7 @@
 
         try {
           await validateAdminToken(token);
-          localStorage.setItem("any-player-admin-token", token);
+          sessionStorage.setItem("any-player-admin-token", token);
           setStatus("Login successful. Redirecting...");
           window.location.assign("/admin");
         } catch (error) {

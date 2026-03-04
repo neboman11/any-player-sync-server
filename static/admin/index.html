@@ -77,7 +77,7 @@
       const status = document.getElementById("status");
       const usersContainer = document.getElementById("users");
 
-      tokenInput.value = localStorage.getItem("any-player-admin-token") || "";
+      tokenInput.value = sessionStorage.getItem("any-player-admin-token") || "";
       if (!tokenInput.value.trim()) {
         window.location.assign("/admin/login");
       }
@@ -127,30 +127,64 @@
           const userEl = document.createElement("div");
           userEl.className = "user";
 
-          const disabledText = user.disabled_at ? " (disabled)" : "";
-          userEl.innerHTML = `
-        <div><strong>${user.name}</strong>${disabledText} ${user.is_admin ? "[admin]" : ""}</div>
-        <div class="row" style="margin-top: 8px;">
-          <button data-action="create-token" data-user-id="${user.id}">Create Token</button>
-          <button data-action="toggle-disable" data-user-id="${user.id}" data-disabled="${user.disabled_at ? "true" : "false"}">
-            ${user.disabled_at ? "Enable User" : "Disable User"}
-          </button>
-        </div>
-        <div><strong>Tokens</strong></div>
-      `;
+          const nameDiv = document.createElement("div");
+          const strong = document.createElement("strong");
+          strong.textContent = user.name;
+          nameDiv.appendChild(strong);
+          if (user.disabled_at) nameDiv.append(" (disabled)");
+          if (user.is_admin) nameDiv.append(" [admin]");
+          userEl.appendChild(nameDiv);
+
+          const rowDiv = document.createElement("div");
+          rowDiv.className = "row";
+          rowDiv.style.marginTop = "8px";
+          const createTokenBtn = document.createElement("button");
+          createTokenBtn.dataset.action = "create-token";
+          createTokenBtn.dataset.userId = String(user.id);
+          createTokenBtn.textContent = "Create Token";
+          rowDiv.appendChild(createTokenBtn);
+          const toggleDisableBtn = document.createElement("button");
+          toggleDisableBtn.dataset.action = "toggle-disable";
+          toggleDisableBtn.dataset.userId = String(user.id);
+          toggleDisableBtn.dataset.disabled = user.disabled_at ? "true" : "false";
+          toggleDisableBtn.textContent = user.disabled_at ? "Enable User" : "Disable User";
+          rowDiv.appendChild(toggleDisableBtn);
+          userEl.appendChild(rowDiv);
+
+          const tokensTitle = document.createElement("div");
+          const tokensStrong = document.createElement("strong");
+          tokensStrong.textContent = "Tokens";
+          tokensTitle.appendChild(tokensStrong);
+          userEl.appendChild(tokensTitle);
 
           const tokensEl = document.createElement("div");
           if (!user.tokens || user.tokens.length === 0) {
-            tokensEl.innerHTML = '<div class="token">No tokens</div>';
+            const noTokensEl = document.createElement("div");
+            noTokensEl.className = "token";
+            noTokensEl.textContent = "No tokens";
+            tokensEl.appendChild(noTokensEl);
           } else {
             for (const token of user.tokens) {
               const tokenEl = document.createElement("div");
               const revoked = token.revoked_at ? "revoked" : "active";
               tokenEl.className = "token";
-              tokenEl.innerHTML = `
-            <span><code>${token.token_prefix}…</code> ${token.label} (${revoked})</span>
-            ${token.revoked_at ? "" : `<button data-action="revoke-token" data-token-id="${token.id}">Revoke</button>`}
-          `;
+
+              const span = document.createElement("span");
+              const codeEl = document.createElement("code");
+              codeEl.textContent = `${token.token_prefix}…`;
+              span.appendChild(codeEl);
+              span.append(" ");
+              span.append(document.createTextNode(`${token.label} (${revoked})`));
+              tokenEl.appendChild(span);
+
+              if (!token.revoked_at) {
+                const buttonEl = document.createElement("button");
+                buttonEl.dataset.action = "revoke-token";
+                buttonEl.dataset.tokenId = String(token.id);
+                buttonEl.textContent = "Revoke";
+                tokenEl.appendChild(buttonEl);
+              }
+
               tokensEl.appendChild(tokenEl);
             }
           }
@@ -171,8 +205,8 @@
       }
 
       document.getElementById("saveToken").addEventListener("click", () => {
-        localStorage.setItem("any-player-admin-token", tokenInput.value.trim());
-        setStatus("Admin token saved in browser localStorage.");
+        sessionStorage.setItem("any-player-admin-token", tokenInput.value.trim());
+        setStatus("Admin token saved in browser sessionStorage.");
       });
 
       document.getElementById("loadUsers").addEventListener("click", () => {
@@ -180,7 +214,7 @@
       });
 
       document.getElementById("logout").addEventListener("click", () => {
-        localStorage.removeItem("any-player-admin-token");
+        sessionStorage.removeItem("any-player-admin-token");
         window.location.assign("/admin/login");
       });
 
