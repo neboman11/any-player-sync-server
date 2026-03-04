@@ -56,12 +56,6 @@ pub struct UpdateEvent {
     pub source_client_id: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct UserScopedUpdateEvent {
-    pub user_id: i64,
-    pub event: UpdateEvent,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct AuthenticatedUser {
     pub id: i64,

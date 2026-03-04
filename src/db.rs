@@ -131,7 +131,7 @@ pub async fn ensure_bootstrap_admin(
         INSERT INTO auth_tokens (user_id, token_hash, token_prefix, label, revoked_at)
         VALUES ($1, $2, $3, 'bootstrap', NULL)
         ON CONFLICT (token_hash)
-        DO UPDATE SET revoked_at = NULL
+        DO UPDATE SET user_id = $1, token_prefix = $3, label = 'bootstrap', revoked_at = NULL
         "#,
     )
     .bind(user_id)
@@ -558,13 +558,15 @@ pub async fn create_user(
     .fetch_optional(pool)
     .await
     .map_err(|err| {
-        let message = err.to_string();
-        if message.contains("duplicate key") {
-            ApiError::conflict("a user with that name already exists".to_string())
-        } else {
-            error!("failed to create user: {err}");
-            ApiError::internal("failed to create user".to_string())
+        if let sqlx::Error::Database(db_err) = &err {
+            if db_err.code().as_deref() == Some("23505") {
+                return ApiError::conflict(
+                    "a user with that name already exists".to_string(),
+                );
+            }
         }
+        error!("failed to create user: {err}");
+        ApiError::internal("failed to create user".to_string())
     })?
     .ok_or_else(|| ApiError::internal("failed to create user".to_string()))?;
 
