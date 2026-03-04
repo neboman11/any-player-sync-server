@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Router,
     extract::DefaultBodyLimit,
-    http::{HeaderValue, Method, header},
+    http::{HeaderValue, Method, Request, header},
     routing::{get, patch, post},
 };
 use tower_http::{
@@ -73,6 +73,17 @@ pub fn build_router(
         .route("/v1/ws", get(handlers::ws_updates))
         .layer(DefaultBodyLimit::max(max_body_size))
         .layer(cors)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            // Redact query strings from /v1/ws spans to avoid logging bearer
+            // tokens that may be passed via the `token` query parameter.
+            TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
+                let uri = if request.uri().path() == "/v1/ws" {
+                    request.uri().path().to_owned()
+                } else {
+                    request.uri().to_string()
+                };
+                tracing::info_span!("request", method = %request.method(), uri = %uri)
+            }),
+        )
         .with_state(state)
 }

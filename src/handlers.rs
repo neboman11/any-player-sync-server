@@ -107,7 +107,7 @@ pub async fn put_snapshot(
 ) -> Result<Json<crate::models::Snapshot>, ApiError> {
     let user = authenticate_with_headers(&state, &headers).await?;
     let (snapshot, event) = replace_snapshot(&state.pool, user.id, payload).await?;
-    state.send_user_event(user.id, event);
+    state.send_user_event(user.id, event).await;
     Ok(Json(snapshot))
 }
 
@@ -150,7 +150,7 @@ pub async fn put_namespace(
     }
 
     let (snapshot, event) = update_namespace(&state.pool, user.id, namespace, payload).await?;
-    state.send_user_event(user.id, event);
+    state.send_user_event(user.id, event).await;
 
     Ok(Json(UpdateResponse {
         version: snapshot.version,
@@ -167,7 +167,7 @@ pub async fn ws_updates(
     Query(query): Query<WsQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
     let user = authenticate_with_headers_or_query_token(&state, &headers, query.token).await?;
-    let updates_rx = state.subscribe_user(user.id);
+    let updates_rx = state.subscribe_user(user.id).await;
     Ok(ws.on_upgrade(move |socket| {
         handle_ws_connection(socket, updates_rx)
     }))

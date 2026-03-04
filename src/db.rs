@@ -91,6 +91,61 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    // Migrate legacy sync_document data into user_sync_document if the old table
+    // exists. This preserves existing snapshot state for upgraded databases.
+    let (legacy_exists,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT to_regclass('public.sync_document') IS NOT NULL AS exists
+        "#,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if legacy_exists {
+        // Ensure there is a default user to own the migrated snapshots.
+        // Uses ON CONFLICT to be idempotent across runs.
+        let default_user_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO users (name, is_admin)
+            VALUES ($1, FALSE)
+            ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id
+            "#,
+        )
+        .bind("default")
+        .fetch_one(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO user_sync_document (
+                user_id,
+                id,
+                version,
+                updated_at,
+                app_state,
+                playlists,
+                provider_configuration,
+                settings
+            )
+            SELECT
+                $1 AS user_id,
+                id,
+                version,
+                updated_at,
+                app_state,
+                playlists,
+                provider_configuration,
+                settings
+            FROM sync_document
+            ON CONFLICT (user_id, id) DO NOTHING
+            "#,
+        )
+        .bind(default_user_id)
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }
 
