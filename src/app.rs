@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::DefaultBodyLimit,
-    http::{header, HeaderValue, Method, Request},
-    routing::{get, patch, post},
     Router,
+    extract::DefaultBodyLimit,
+    http::{HeaderValue, Method, Request, header},
+    routing::{get, patch, post},
 };
 use tower_http::{
     compression::CompressionLayer,
