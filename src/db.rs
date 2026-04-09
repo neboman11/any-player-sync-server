@@ -264,10 +264,14 @@ pub async fn authenticate_token(pool: &PgPool, token: &str) -> Result<Authentica
         return Err(ApiError::forbidden("user account is disabled".to_string()));
     }
 
-    let _ = sqlx::query("UPDATE auth_tokens SET last_used_at = NOW() WHERE id = $1")
-        .bind(row.4)
-        .execute(pool)
-        .await;
+    let token_id = row.4;
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let _ = sqlx::query("UPDATE auth_tokens SET last_used_at = NOW() WHERE id = $1")
+            .bind(token_id)
+            .execute(&pool)
+            .await;
+    });
 
     Ok(AuthenticatedUser {
         id: row.0,

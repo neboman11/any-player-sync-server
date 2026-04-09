@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
-    Router,
     extract::DefaultBodyLimit,
-    http::{HeaderValue, Method, Request, header},
+    http::{header, HeaderValue, Method, Request},
     routing::{get, patch, post},
+    Router,
 };
 use tower_http::{
+    compression::CompressionLayer,
     cors::{AllowOrigin, CorsLayer},
     trace::TraceLayer,
 };
@@ -72,6 +73,7 @@ pub fn build_router(
         )
         .route("/v1/ws", get(handlers::ws_updates))
         .layer(DefaultBodyLimit::max(max_body_size))
+        .layer(CompressionLayer::new())
         .layer(cors)
         .layer(
             // Redact query strings from /v1/ws spans to avoid logging bearer

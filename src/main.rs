@@ -10,7 +10,7 @@ mod ws;
 
 use std::sync::Arc;
 
-use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 use tracing::info;
 
 use crate::{
@@ -32,12 +32,19 @@ async fn main() -> anyhow::Result<()> {
 
     let config = AppConfig::from_env()?;
 
-    let pool = PgPool::connect(&config.database_url).await.map_err(|err| {
-        anyhow::anyhow!(
-            "failed to connect to postgres ({}): {err}",
-            config.database_url_safe
-        )
-    })?;
+    let pool = PgPoolOptions::new()
+        .max_connections(20)
+        .min_connections(2)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .idle_timeout(std::time::Duration::from_secs(600))
+        .connect(&config.database_url)
+        .await
+        .map_err(|err| {
+            anyhow::anyhow!(
+                "failed to connect to postgres ({}): {err}",
+                config.database_url_safe
+            )
+        })?;
     ensure_schema(&pool).await?;
     ensure_bootstrap_admin(
         &pool,
