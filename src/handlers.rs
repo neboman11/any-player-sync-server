@@ -222,12 +222,12 @@ pub async fn admin_create_token(
     let user = authenticate_with_headers(&state, &headers).await?;
     require_admin(&user)?;
 
-    if let Some(ref label) = payload.label {
-        if label.len() > 512 {
-            return Err(ApiError::bad_request(
-                "token label must not exceed 512 characters".to_string(),
-            ));
-        }
+    if let Some(ref label) = payload.label
+        && label.len() > 512
+    {
+        return Err(ApiError::bad_request(
+            "token label must not exceed 512 characters".to_string(),
+        ));
     }
 
     let (id, label, token_prefix, token, created_at) =
