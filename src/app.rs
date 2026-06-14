@@ -22,10 +22,10 @@ pub fn build_router(
 ) -> Router {
     let cors = if cors_allowed_origins.is_empty() {
         warn!(
-            "CORS_ALLOWED_ORIGINS is not set — all origins are permitted. \
-             Set CORS_ALLOWED_ORIGINS to a comma-separated list of allowed origins in production."
+            "CORS_ALLOWED_ORIGINS is not set — all cross-origin requests will be rejected. \
+             Set CORS_ALLOWED_ORIGINS to a comma-separated list of allowed origins."
         );
-        CorsLayer::permissive()
+        CorsLayer::new()
     } else {
         let origins: Vec<HeaderValue> = cors_allowed_origins
             .iter()

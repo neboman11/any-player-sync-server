@@ -197,7 +197,15 @@ pub async fn admin_create_user(
     let user = authenticate_with_headers(&state, &headers).await?;
     require_admin(&user)?;
 
-    let created = create_user(&state.pool, &payload.name, payload.is_admin).await?;
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::bad_request("username must not be empty".to_string()));
+    }
+    if name.len() > 255 {
+        return Err(ApiError::bad_request("username must not exceed 255 characters".to_string()));
+    }
+
+    let created = create_user(&state.pool, &name, payload.is_admin).await?;
     Ok(Json(created))
 }
 
@@ -209,6 +217,12 @@ pub async fn admin_create_token(
 ) -> Result<Json<TokenCreatedResponse>, ApiError> {
     let user = authenticate_with_headers(&state, &headers).await?;
     require_admin(&user)?;
+
+    if let Some(ref label) = payload.label {
+        if label.len() > 512 {
+            return Err(ApiError::bad_request("token label must not exceed 512 characters".to_string()));
+        }
+    }
 
     let (id, label, token_prefix, token, created_at) =
         create_token(&state.pool, user_id, payload.label).await?;
