@@ -199,10 +199,14 @@ pub async fn admin_create_user(
 
     let name = payload.name.trim().to_string();
     if name.is_empty() {
-        return Err(ApiError::bad_request("username must not be empty".to_string()));
+        return Err(ApiError::bad_request(
+            "username must not be empty".to_string(),
+        ));
     }
     if name.len() > 255 {
-        return Err(ApiError::bad_request("username must not exceed 255 characters".to_string()));
+        return Err(ApiError::bad_request(
+            "username must not exceed 255 characters".to_string(),
+        ));
     }
 
     let created = create_user(&state.pool, &name, payload.is_admin).await?;
@@ -220,7 +224,9 @@ pub async fn admin_create_token(
 
     if let Some(ref label) = payload.label {
         if label.len() > 512 {
-            return Err(ApiError::bad_request("token label must not exceed 512 characters".to_string()));
+            return Err(ApiError::bad_request(
+                "token label must not exceed 512 characters".to_string(),
+            ));
         }
     }
 
