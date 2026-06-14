@@ -23,7 +23,8 @@ impl AppConfig {
         let db_host = std::env::var("DB_HOST").unwrap_or_else(|_| "127.0.0.1".into());
         let db_port = std::env::var("DB_PORT").unwrap_or_else(|_| "5432".into());
         let db_user = std::env::var("DB_USER").unwrap_or_else(|_| "postgres".into());
-        let db_password = std::env::var("DB_PASSWORD").unwrap_or_else(|_| "postgres".into());
+        let db_password = std::env::var("DB_PASSWORD")
+            .with_context(|| "DB_PASSWORD environment variable is required but not set")?;
         let db_name = std::env::var("DB_NAME").unwrap_or_else(|_| "any_player_sync".into());
         let db_sslmode = std::env::var("DB_SSLMODE").unwrap_or_else(|_| "prefer".into());
 
