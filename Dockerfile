@@ -7,11 +7,7 @@ COPY static ./static
 
 RUN cargo build --release --locked
 
-FROM debian:bookworm-slim AS runtime
-RUN apt-get update \
-    && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12:latest AS runtime
 
 WORKDIR /app
 COPY --from=builder /app/target/release/any-player-sync-server /usr/local/bin/any-player-sync-server
