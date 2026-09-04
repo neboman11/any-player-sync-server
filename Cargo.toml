@@ -18,7 +18,8 @@ sqlx = { version = "0.8", features = [
     "json",
 ] }
 tokio = { version = "1.45", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "compression-full"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "compression-full", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rand = "0.9"

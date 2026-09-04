@@ -2,11 +2,14 @@ use std::sync::Arc;
 
 use axum::{
     Json,
-    extract::{Path, Query, State, WebSocketUpgrade},
+    body::Body,
+    extract::{Path, Query, Request, State, WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
 };
 use chrono::Utc;
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use crate::{
     db::{
@@ -15,9 +18,10 @@ use crate::{
     },
     errors::ApiError,
     models::{
-        AuthenticatedUser, CreateTokenRequest, CreateUserRequest, HealthResponse, Namespace,
-        NamespacePayload, OperationResponse, SetUserDisabledRequest, SnapshotPayload,
-        SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery, namespace_data,
+        AuthenticatedUser, CreateTokenRequest, CreateUserRequest, DjModelInfoResponse,
+        HealthResponse, Namespace, NamespacePayload, OperationResponse, SetUserDisabledRequest,
+        SnapshotPayload, SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery,
+        namespace_data,
     },
     state::AppContext,
     ws::handle_ws_connection,
@@ -108,6 +112,44 @@ pub async fn put_snapshot(
     let (snapshot, event) = replace_snapshot(&state.pool, user.id, payload).await?;
     state.send_user_event(user.id, event).await;
     Ok(Json(snapshot))
+}
+
+/// Metadata for the operator-configured AI DJ on-device model (size + sha256), so the
+/// Android client can decide whether it needs to (re)download before verifying a
+/// completed download. 404s if the server operator hasn't set `DJ_MODEL_PATH`.
+pub async fn dj_model_info(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+) -> Result<Json<DjModelInfoResponse>, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    let model = state
+        .dj_model
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("AI DJ model is not configured on this server".to_string()))?;
+    Ok(Json(DjModelInfoResponse {
+        version: model.version.clone(),
+        size_bytes: model.size_bytes,
+        sha256: model.sha256.clone(),
+    }))
+}
+
+/// Streams the operator-configured AI DJ model file. Delegates to `tower_http`'s
+/// `ServeFile`, which handles `Range` requests so the Android client can resume an
+/// interrupted download instead of restarting a ~500MB+ transfer from scratch.
+pub async fn dj_model_download(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    let model = state
+        .dj_model
+        .as_ref()
+        .ok_or_else(|| ApiError::not_found("AI DJ model is not configured on this server".to_string()))?;
+    match ServeFile::new(&model.path).oneshot(request).await {
+        Ok(response) => Ok(response.into_response()),
+        Err(err) => match err {},
+    }
 }
 
 pub async fn get_namespace(

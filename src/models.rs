@@ -29,6 +29,13 @@ pub struct NamespacePayload {
     pub data: Value,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DjModelInfoResponse {
+    pub version: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotPayload {
     pub expected_version: Option<i64>,

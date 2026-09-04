@@ -67,6 +67,8 @@ pub fn build_router(
             "/v1/snapshot",
             get(handlers::get_snapshot).put(handlers::put_snapshot),
         )
+        .route("/v1/dj-model/info", get(handlers::dj_model_info))
+        .route("/v1/dj-model/download", get(handlers::dj_model_download))
         .route(
             "/v1/state/:namespace",
             get(handlers::get_namespace).put(handlers::put_namespace),

@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use anyhow::Context;
 
@@ -14,6 +15,12 @@ pub struct AppConfig {
     /// Optional bootstrap admin user name and token. When token is set, the user and token are ensured at startup.
     pub admin_bootstrap_name: String,
     pub admin_bootstrap_token: Option<String>,
+    /// Path to the operator-provided AI DJ on-device model file (`.task`), set via `DJ_MODEL_PATH`.
+    /// The server never bundles or downloads this itself - the operator places their own
+    /// license-accepted, converted model file at this path.
+    pub dj_model_path: Option<PathBuf>,
+    /// Version label for the configured DJ model, set via `DJ_MODEL_VERSION` (used by clients for cache-busting).
+    pub dj_model_version: String,
 }
 
 impl AppConfig {
@@ -61,6 +68,15 @@ impl AppConfig {
             .parse()
             .with_context(|| format!("invalid BIND_ADDRESS '{bind_address}'"))?;
 
+        let dj_model_path = std::env::var("DJ_MODEL_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+
+        let dj_model_version =
+            std::env::var("DJ_MODEL_VERSION").unwrap_or_else(|_| "unversioned".to_string());
+
         Ok(Self {
             bind_address,
             database_url,
@@ -69,6 +85,8 @@ impl AppConfig {
             max_body_size,
             admin_bootstrap_name,
             admin_bootstrap_token,
+            dj_model_path,
+            dj_model_version,
         })
     }
 }

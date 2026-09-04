@@ -30,6 +30,8 @@ Environment variables:
 - `DB_SSLMODE` (default: `prefer`)
 - `ADMIN_BOOTSTRAP_NAME` (default: `admin`)
 - `ADMIN_BOOTSTRAP_TOKEN` (optional; if set, this token is activated for the bootstrap admin account)
+- `DJ_MODEL_PATH` (optional; absolute path to the on-device AI DJ model `.task` file - see "AI DJ model hosting" below)
+- `DJ_MODEL_VERSION` (default: `unversioned`; a label for the configured model, used by clients for cache-busting)
 
 Examples:
 
@@ -134,6 +136,26 @@ Supported admin operations:
 - Create tokens
 - Revoke tokens
 - Enable/disable users
+
+## AI DJ model hosting
+
+The Android app's optional "AI DJ" feature runs a small on-device LLM (e.g. Gemma 3 1B,
+converted to a MediaPipe `.task` bundle) entirely on-device, but that file is too large
+to ship in the app itself and requires accepting the model's own license. This server
+never downloads, converts, or redistributes the model on your behalf - you place your
+own license-accepted `.task` file on disk and point `DJ_MODEL_PATH` at it:
+
+```bash
+DJ_MODEL_PATH=/srv/any-player/dj-models/gemma3-1b-it-int4.task \
+DJ_MODEL_VERSION=gemma3-1b-it-int4-v1 \
+cargo run
+```
+
+Endpoints (both require the same `Authorization: Bearer <token>` as the sync API):
+- `GET /v1/dj-model/info` - returns `{ "version", "size_bytes", "sha256" }`, or `404` if `DJ_MODEL_PATH` isn't set/readable.
+- `GET /v1/dj-model/download` - streams the model file, honoring `Range` requests so an interrupted client download can resume.
+
+The file's sha256 is hashed once at server startup, not per-request.
 
 ## Integration guide
 

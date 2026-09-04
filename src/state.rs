@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use sqlx::PgPool;
 use tokio::sync::{RwLock, broadcast};
@@ -10,15 +11,27 @@ use crate::models::UpdateEvent;
 /// via a full snapshot.
 const USER_CHANNEL_CAPACITY: usize = 64;
 
+/// Metadata for the operator-configured AI DJ on-device model file, computed once
+/// at startup so repeated `/v1/dj-model/info` calls don't re-hash a large file.
+#[derive(Clone)]
+pub struct DjModelInfo {
+    pub path: PathBuf,
+    pub version: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
 pub struct AppContext {
     pub pool: PgPool,
+    pub dj_model: Option<DjModelInfo>,
     user_channels: RwLock<HashMap<i64, broadcast::Sender<UpdateEvent>>>,
 }
 
 impl AppContext {
-    pub fn new(pool: PgPool) -> Self {
+    pub fn new(pool: PgPool, dj_model: Option<DjModelInfo>) -> Self {
         Self {
             pool,
+            dj_model,
             user_channels: RwLock::new(HashMap::new()),
         }
     }
