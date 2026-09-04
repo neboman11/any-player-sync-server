@@ -52,15 +52,15 @@ pub fn build_router(
             get(handlers::admin_list_users).post(handlers::admin_create_user),
         )
         .route(
-            "/v1/admin/users/:user_id/tokens",
+            "/v1/admin/users/{user_id}/tokens",
             post(handlers::admin_create_token),
         )
         .route(
-            "/v1/admin/users/:user_id/disabled",
+            "/v1/admin/users/{user_id}/disabled",
             patch(handlers::admin_set_user_disabled),
         )
         .route(
-            "/v1/admin/tokens/:token_id",
+            "/v1/admin/tokens/{token_id}",
             axum::routing::delete(handlers::admin_revoke_token),
         )
         .route(
@@ -70,7 +70,7 @@ pub fn build_router(
         .route("/v1/dj-model/info", get(handlers::dj_model_info))
         .route("/v1/dj-model/download", get(handlers::dj_model_download))
         .route(
-            "/v1/state/:namespace",
+            "/v1/state/{namespace}",
             get(handlers::get_namespace).put(handlers::put_namespace),
         )
         .route("/v1/ws", get(handlers::ws_updates))
