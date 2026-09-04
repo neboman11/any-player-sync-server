@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Context;
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 
 pub struct AppConfig {
     pub bind_address: SocketAddr,
@@ -35,11 +36,17 @@ impl AppConfig {
         let db_name = std::env::var("DB_NAME").unwrap_or_else(|_| "any_player_sync".into());
         let db_sslmode = std::env::var("DB_SSLMODE").unwrap_or_else(|_| "prefer".into());
 
+        // DB_USER/DB_PASSWORD can contain characters (`@`, `#`, `:`, ...) that are
+        // structurally significant in a URL - unescaped, they silently corrupt the
+        // parsed host/port (e.g. `#` truncates everything after it as a URL fragment).
+        let db_user_encoded = utf8_percent_encode(&db_user, NON_ALPHANUMERIC).to_string();
+        let db_password_encoded = utf8_percent_encode(&db_password, NON_ALPHANUMERIC).to_string();
+
         let database_url = format!(
-            "postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}"
+            "postgres://{db_user_encoded}:{db_password_encoded}@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}"
         );
         let database_url_safe =
-            format!("postgres://{db_user}:****@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}");
+            format!("postgres://{db_user_encoded}:****@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}");
 
         let cors_allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS")
             .unwrap_or_default()
