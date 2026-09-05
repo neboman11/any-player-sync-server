@@ -32,6 +32,8 @@ Environment variables:
 - `ADMIN_BOOTSTRAP_TOKEN` (optional; if set, this token is activated for the bootstrap admin account)
 - `DJ_MODEL_PATH` (optional; absolute path to the on-device AI DJ model `.task` file - see "AI DJ model hosting" below)
 - `DJ_MODEL_VERSION` (default: `unversioned`; a label for the configured model, used by clients for cache-busting)
+- `DJ_VOICE_MODEL_PATH` (optional; absolute path to the AI DJ Piper/VITS voice bundle `.zip` - see "AI DJ neural voice hosting" below)
+- `DJ_VOICE_MODEL_VERSION` (default: `unversioned`; a label for the configured voice bundle, used by clients for cache-busting)
 
 Examples:
 
@@ -156,6 +158,25 @@ Endpoints (both require the same `Authorization: Bearer <token>` as the sync API
 - `GET /v1/dj-model/download` - streams the model file, honoring `Range` requests so an interrupted client download can resume.
 
 The file's sha256 is hashed once at server startup, not per-request.
+
+### AI DJ neural voice hosting
+
+The Android app synthesizes the DJ's speech on-device using an offline neural TTS
+engine ([sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) running a Piper/VITS
+voice), for a more natural voice than the system TTS engine. As with the LLM model,
+this server just hosts the file - you provide a zip containing `<voice>.onnx` +
+`tokens.txt` (the shared `espeak-ng-data` phoneme tables ship inside the app itself,
+since they're identical across voices) and point `DJ_VOICE_MODEL_PATH` at it:
+
+```bash
+DJ_VOICE_MODEL_PATH=/srv/any-player/dj-models/en_US-libritts_r-medium-int8.zip \
+DJ_VOICE_MODEL_VERSION=en_US-libritts_r-medium-int8-v1 \
+cargo run
+```
+
+Endpoints (same auth, same shape as the LLM model endpoints above):
+- `GET /v1/dj-voice-model/info`
+- `GET /v1/dj-voice-model/download`
 
 ## Integration guide
 

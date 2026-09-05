@@ -23,7 +23,7 @@ use crate::{
         SnapshotPayload, SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery,
         namespace_data,
     },
-    state::AppContext,
+    state::{AppContext, DjModelInfo},
     ws::handle_ws_connection,
 };
 
@@ -114,18 +114,15 @@ pub async fn put_snapshot(
     Ok(Json(snapshot))
 }
 
-/// Metadata for the operator-configured AI DJ on-device model (size + sha256), so the
-/// Android client can decide whether it needs to (re)download before verifying a
-/// completed download. 404s if the server operator hasn't set `DJ_MODEL_PATH`.
-pub async fn dj_model_info(
-    State(state): State<Arc<AppContext>>,
-    headers: HeaderMap,
+/// Shared by [dj_model_info]/[dj_voice_model_info]: metadata (size + sha256) for
+/// whichever operator-configured on-device model file is asked about, so the Android
+/// client can decide whether it needs to (re)download before verifying a completed
+/// download. 404s if the server operator hasn't configured that particular model.
+fn dj_model_info_response(
+    model: Option<&DjModelInfo>,
+    not_configured_message: &str,
 ) -> Result<Json<DjModelInfoResponse>, ApiError> {
-    authenticate_with_headers(&state, &headers).await?;
-    let model = state
-        .dj_model
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("AI DJ model is not configured on this server".to_string()))?;
+    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
     Ok(Json(DjModelInfoResponse {
         version: model.version.clone(),
         size_bytes: model.size_bytes,
@@ -133,23 +130,73 @@ pub async fn dj_model_info(
     }))
 }
 
-/// Streams the operator-configured AI DJ model file. Delegates to `tower_http`'s
+/// Shared by [dj_model_download]/[dj_voice_model_download]: streams whichever
+/// operator-configured model file is asked for. Delegates to `tower_http`'s
 /// `ServeFile`, which handles `Range` requests so the Android client can resume an
-/// interrupted download instead of restarting a ~500MB+ transfer from scratch.
+/// interrupted download instead of restarting a large transfer from scratch.
+async fn dj_model_download_response(
+    model: Option<&DjModelInfo>,
+    not_configured_message: &str,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
+    match ServeFile::new(&model.path).oneshot(request).await {
+        Ok(response) => Ok(response.into_response()),
+        Err(err) => match err {},
+    }
+}
+
+pub async fn dj_model_info(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+) -> Result<Json<DjModelInfoResponse>, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    dj_model_info_response(
+        state.dj_model.as_ref(),
+        "AI DJ model is not configured on this server",
+    )
+}
+
 pub async fn dj_model_download(
     State(state): State<Arc<AppContext>>,
     headers: HeaderMap,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    let model = state
-        .dj_model
-        .as_ref()
-        .ok_or_else(|| ApiError::not_found("AI DJ model is not configured on this server".to_string()))?;
-    match ServeFile::new(&model.path).oneshot(request).await {
-        Ok(response) => Ok(response.into_response()),
-        Err(err) => match err {},
-    }
+    dj_model_download_response(
+        state.dj_model.as_ref(),
+        "AI DJ model is not configured on this server",
+        request,
+    )
+    .await
+}
+
+/// Metadata for the operator-configured AI DJ neural voice bundle (a zip containing
+/// the Piper/VITS `.onnx` model + `tokens.txt`; the shared `espeak-ng-data` phoneme
+/// tables ship inside the app itself since they're identical across voices).
+pub async fn dj_voice_model_info(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+) -> Result<Json<DjModelInfoResponse>, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    dj_model_info_response(
+        state.dj_voice_model.as_ref(),
+        "AI DJ voice model is not configured on this server",
+    )
+}
+
+pub async fn dj_voice_model_download(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    dj_model_download_response(
+        state.dj_voice_model.as_ref(),
+        "AI DJ voice model is not configured on this server",
+        request,
+    )
+    .await
 }
 
 pub async fn get_namespace(
@@ -312,3 +359,103 @@ pub async fn admin_set_user_disabled(
 
 const ADMIN_HTML: &str = include_str!("../static/admin/index.html");
 const ADMIN_LOGIN_HTML: &str = include_str!("../static/admin/login.html");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    fn voice_model(path: std::path::PathBuf) -> DjModelInfo {
+        DjModelInfo {
+            path,
+            version: "voice-v1".to_string(),
+            size_bytes: 20,
+            sha256: "590cde0323c8ece1ed91c67448110d2247fe64708ce2310d1e988df0d8e3c0bb".to_string(),
+        }
+    }
+
+    fn voice_fixture() -> (std::path::PathBuf, DjModelInfo) {
+        let path = std::env::temp_dir().join(format!(
+            "any-player-voice-model-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        fs::write(&path, b"voice-model-fixture\n").expect("write voice model fixture");
+        let model = voice_model(path.clone());
+        (path, model)
+    }
+
+    #[test]
+    fn voice_model_info_is_not_found_when_unconfigured() {
+        let error = match dj_model_info_response(None, "voice model is not configured") {
+            Err(error) => error,
+            Ok(_) => panic!("unconfigured voice model must be absent"),
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn voice_model_info_requires_authorization() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .expect("create lazy pool");
+        let state = Arc::new(AppContext::new(pool, None, None));
+
+        let error = match dj_voice_model_info(State(state), HeaderMap::new()).await {
+            Err(error) => error,
+            Ok(_) => panic!("voice model info must require authorization"),
+        };
+
+        assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn voice_model_info_exposes_download_contract() {
+        let response = dj_model_info_response(
+            Some(&voice_model(std::path::PathBuf::from("/models/voice.zip"))),
+            "voice model is not configured",
+        )
+        .expect("configured voice model returns info")
+        .0;
+
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize model info"),
+            serde_json::json!({
+                "version": "voice-v1",
+                "size_bytes": 20,
+                "sha256": "590cde0323c8ece1ed91c67448110d2247fe64708ce2310d1e988df0d8e3c0bb"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn voice_model_download_honors_byte_ranges() {
+        let (path, model) = voice_fixture();
+        let request = Request::builder()
+            .header(header::RANGE, "bytes=6-10")
+            .body(Body::empty())
+            .expect("build range request");
+
+        let response =
+            dj_model_download_response(Some(&model), "voice model is not configured", request)
+                .await
+                .expect("serve voice model range");
+
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read response body")
+                .as_ref(),
+            b"model"
+        );
+        fs::remove_file(path).expect("remove voice model fixture");
+    }
+}

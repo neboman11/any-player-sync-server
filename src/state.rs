@@ -24,14 +24,22 @@ pub struct DjModelInfo {
 pub struct AppContext {
     pub pool: PgPool,
     pub dj_model: Option<DjModelInfo>,
+    /// Operator-configured AI DJ neural voice bundle (Piper/VITS `.onnx` + `tokens.txt`
+    /// zipped together), served the same way as [dj_model] but via `/v1/dj-voice-model/*`.
+    pub dj_voice_model: Option<DjModelInfo>,
     user_channels: RwLock<HashMap<i64, broadcast::Sender<UpdateEvent>>>,
 }
 
 impl AppContext {
-    pub fn new(pool: PgPool, dj_model: Option<DjModelInfo>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        dj_model: Option<DjModelInfo>,
+        dj_voice_model: Option<DjModelInfo>,
+    ) -> Self {
         Self {
             pool,
             dj_model,
+            dj_voice_model,
             user_channels: RwLock::new(HashMap::new()),
         }
     }

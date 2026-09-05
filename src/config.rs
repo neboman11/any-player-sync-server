@@ -22,6 +22,11 @@ pub struct AppConfig {
     pub dj_model_path: Option<PathBuf>,
     /// Version label for the configured DJ model, set via `DJ_MODEL_VERSION` (used by clients for cache-busting).
     pub dj_model_version: String,
+    /// Path to the operator-provided AI DJ neural voice bundle (a zip containing a Piper/VITS
+    /// `.onnx` model + `tokens.txt`), set via `DJ_VOICE_MODEL_PATH`.
+    pub dj_voice_model_path: Option<PathBuf>,
+    /// Version label for the configured DJ voice model, set via `DJ_VOICE_MODEL_VERSION`.
+    pub dj_voice_model_version: String,
 }
 
 impl AppConfig {
@@ -45,8 +50,9 @@ impl AppConfig {
         let database_url = format!(
             "postgres://{db_user_encoded}:{db_password_encoded}@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}"
         );
-        let database_url_safe =
-            format!("postgres://{db_user_encoded}:****@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}");
+        let database_url_safe = format!(
+            "postgres://{db_user_encoded}:****@{db_host}:{db_port}/{db_name}?sslmode={db_sslmode}"
+        );
 
         let cors_allowed_origins = std::env::var("CORS_ALLOWED_ORIGINS")
             .unwrap_or_default()
@@ -84,6 +90,15 @@ impl AppConfig {
         let dj_model_version =
             std::env::var("DJ_MODEL_VERSION").unwrap_or_else(|_| "unversioned".to_string());
 
+        let dj_voice_model_path = std::env::var("DJ_VOICE_MODEL_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+
+        let dj_voice_model_version =
+            std::env::var("DJ_VOICE_MODEL_VERSION").unwrap_or_else(|_| "unversioned".to_string());
+
         Ok(Self {
             bind_address,
             database_url,
@@ -94,6 +109,8 @@ impl AppConfig {
             admin_bootstrap_token,
             dj_model_path,
             dj_model_version,
+            dj_voice_model_path,
+            dj_voice_model_version,
         })
     }
 }
