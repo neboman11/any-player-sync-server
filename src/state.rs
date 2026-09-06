@@ -1,10 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sqlx::PgPool;
 use tokio::sync::{RwLock, broadcast};
 
-use crate::models::UpdateEvent;
+use crate::models::{DjVoiceDescriptor, UpdateEvent};
 
 /// Capacity per-user broadcast channel. Slow WebSocket clients that fall more
 /// than this many messages behind will receive a Lagged error and must refresh
@@ -21,12 +21,44 @@ pub struct DjModelInfo {
     pub sha256: String,
 }
 
+#[derive(Clone)]
+pub struct DjVoiceModel {
+    pub descriptor: DjVoiceDescriptor,
+    path: PathBuf,
+}
+
+impl DjVoiceModel {
+    pub(crate) fn new(descriptor: DjVoiceDescriptor, path: PathBuf) -> Self {
+        Self { descriptor, path }
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct DjVoiceCatalog {
+    pub default_id: Option<String>,
+    pub voices: Vec<DjVoiceModel>,
+}
+
+impl DjVoiceCatalog {
+    pub fn default_model(&self) -> Option<&DjVoiceModel> {
+        self.default_id.as_deref().and_then(|id| self.find(id))
+    }
+
+    pub fn find(&self, id: &str) -> Option<&DjVoiceModel> {
+        self.voices.iter().find(|voice| voice.descriptor.id == id)
+    }
+}
+
 pub struct AppContext {
     pub pool: PgPool,
     pub dj_model: Option<DjModelInfo>,
     /// Operator-configured AI DJ neural voice bundle (Piper/VITS `.onnx` + `tokens.txt`
     /// zipped together), served the same way as [dj_model] but via `/v1/dj-voice-model/*`.
-    pub dj_voice_model: Option<DjModelInfo>,
+    pub dj_voice_catalog: DjVoiceCatalog,
     user_channels: RwLock<HashMap<i64, broadcast::Sender<UpdateEvent>>>,
 }
 
@@ -34,12 +66,12 @@ impl AppContext {
     pub fn new(
         pool: PgPool,
         dj_model: Option<DjModelInfo>,
-        dj_voice_model: Option<DjModelInfo>,
+        dj_voice_catalog: DjVoiceCatalog,
     ) -> Self {
         Self {
             pool,
             dj_model,
-            dj_voice_model,
+            dj_voice_catalog,
             user_channels: RwLock::new(HashMap::new()),
         }
     }

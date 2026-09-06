@@ -27,6 +27,8 @@ pub struct AppConfig {
     pub dj_voice_model_path: Option<PathBuf>,
     /// Version label for the configured DJ voice model, set via `DJ_VOICE_MODEL_VERSION`.
     pub dj_voice_model_version: String,
+    /// Optional operator-owned JSON catalog manifest, set with `DJ_VOICE_MODELS_MANIFEST_PATH`.
+    pub dj_voice_models_manifest_path: Option<PathBuf>,
 }
 
 impl AppConfig {
@@ -99,6 +101,12 @@ impl AppConfig {
         let dj_voice_model_version =
             std::env::var("DJ_VOICE_MODEL_VERSION").unwrap_or_else(|_| "unversioned".to_string());
 
+        let dj_voice_models_manifest_path = std::env::var("DJ_VOICE_MODELS_MANIFEST_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+
         Ok(Self {
             bind_address,
             database_url,
@@ -111,6 +119,7 @@ impl AppConfig {
             dj_model_version,
             dj_voice_model_path,
             dj_voice_model_version,
+            dj_voice_models_manifest_path,
         })
     }
 }

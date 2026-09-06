@@ -32,7 +32,8 @@ Environment variables:
 - `ADMIN_BOOTSTRAP_TOKEN` (optional; if set, this token is activated for the bootstrap admin account)
 - `DJ_MODEL_PATH` (optional; absolute path to the on-device AI DJ model `.task` file - see "AI DJ model hosting" below)
 - `DJ_MODEL_VERSION` (default: `unversioned`; a label for the configured model, used by clients for cache-busting)
-- `DJ_VOICE_MODEL_PATH` (optional; absolute path to the AI DJ Piper/VITS voice bundle `.zip` - see "AI DJ neural voice hosting" below)
+- `DJ_VOICE_MODELS_MANIFEST_PATH` (optional; path to the operator-owned AI DJ voice catalog JSON - see "AI DJ neural voice hosting" below)
+- `DJ_VOICE_MODEL_PATH` (optional single-voice compatibility fallback; absolute path to an AI DJ Piper/VITS voice bundle `.zip`)
 - `DJ_VOICE_MODEL_VERSION` (default: `unversioned`; a label for the configured voice bundle, used by clients for cache-busting)
 
 Examples:
@@ -169,14 +170,67 @@ this server just hosts the file - you provide a zip containing `<voice>.onnx` +
 since they're identical across voices) and point `DJ_VOICE_MODEL_PATH` at it:
 
 ```bash
-DJ_VOICE_MODEL_PATH=/srv/any-player/dj-models/en_US-libritts_r-medium-int8.zip \
-DJ_VOICE_MODEL_VERSION=en_US-libritts_r-medium-int8-v1 \
+DJ_VOICE_MODEL_PATH=/srv/any-player/dj-models/en_US-hfc_male-medium.zip \
+DJ_VOICE_MODEL_VERSION=en_US-hfc_male-medium-v1 \
 cargo run
 ```
+
+The app keeps the downloaded bundle matching `DJ_VOICE_MODEL_VERSION` active, so changing
+that version lets operators switch voices without an app release. The example uses the
+single-speaker `vits-piper-en_US-hfc_male-medium` bundle; it uses speaker ID `0` and is
+male-oriented. Validate the perceived depth on target hardware before deploying it.
 
 Endpoints (same auth, same shape as the LLM model endpoints above):
 - `GET /v1/dj-voice-model/info`
 - `GET /v1/dj-voice-model/download`
+
+#### Voice catalog deployment
+
+Set `DJ_VOICE_MODELS_MANIFEST_PATH` to an operator-owned JSON file:
+
+```json
+{
+  "default_id": "baritone",
+  "voices": [
+    {
+      "id": "baritone",
+      "name": "Deep Baritone",
+      "version": "2026-09-06",
+      "path": "/srv/any-player/dj-voices/baritone.zip"
+    }
+  ]
+}
+```
+
+Every `path` is an absolute path on the server to an existing regular zip file.
+Each zip is a complete voice bundle containing a `.onnx` model and
+`tokens.txt`. Each `id`, `version`, and optional `default_id` is 1-128 ASCII
+bytes, starts with an ASCII letter or digit, and otherwise contains only ASCII
+letters, digits, `.`, `_`, or `-`. IDs are unique, and `default_id`, when set,
+must match an entry. Omitting `default_id` is valid and leaves selection to the
+user. The server reads, validates, and hashes the catalog at startup; restart it
+after changing the manifest or a bundle.
+
+The operator is responsible for obtaining and complying with each bundle's
+license. The catalog contains only configured bundles; other bundles are not
+automatically available. Clients cannot provide arbitrary download URLs,
+filesystem paths, or speaker-ID configuration.
+
+On Android, open Settings, tap **Refresh voices**, select a catalog voice, tap
+**Download** explicitly, wait until it is ready, then play. Refreshing or
+selecting does not download the bundle.
+
+If `DJ_VOICE_MODELS_MANIFEST_PATH` is unset, the existing
+`DJ_VOICE_MODEL_PATH` and `DJ_VOICE_MODEL_VERSION` configuration remains a
+compatible single voice with ID `default`. The legacy
+`GET /v1/dj-voice-model/info` and `GET /v1/dj-voice-model/download` endpoints
+remain available. With a manifest, those endpoints serve the optional default
+voice and return `404` when no default is configured.
+
+Catalog endpoints use the same bearer authentication as the legacy endpoints:
+
+- `GET /v1/dj-voice-models`
+- `GET /v1/dj-voice-models/{voice_id}/download`
 
 ## Integration guide
 

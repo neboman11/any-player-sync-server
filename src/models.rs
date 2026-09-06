@@ -36,6 +36,37 @@ pub struct DjModelInfoResponse {
     pub sha256: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DjVoiceDescriptor {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DjVoiceCatalogResponse {
+    pub default_id: Option<String>,
+    pub voices: Vec<DjVoiceDescriptor>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DjVoiceCatalogManifest {
+    pub(crate) default_id: Option<String>,
+    pub(crate) voices: Vec<DjVoiceManifestEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DjVoiceManifestEntry {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) version: String,
+    pub(crate) path: std::path::PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SnapshotPayload {
     pub expected_version: Option<i64>,

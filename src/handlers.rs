@@ -19,11 +19,11 @@ use crate::{
     errors::ApiError,
     models::{
         AuthenticatedUser, CreateTokenRequest, CreateUserRequest, DjModelInfoResponse,
-        HealthResponse, Namespace, NamespacePayload, OperationResponse, SetUserDisabledRequest,
-        SnapshotPayload, SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery,
-        namespace_data,
+        DjVoiceCatalogResponse, DjVoiceDescriptor, HealthResponse, Namespace, NamespacePayload,
+        OperationResponse, SetUserDisabledRequest, SnapshotPayload, SnapshotQuery,
+        TokenCreatedResponse, UpdateResponse, WsQuery, namespace_data,
     },
-    state::{AppContext, DjModelInfo},
+    state::{AppContext, DjModelInfo, DjVoiceCatalog, DjVoiceModel},
     ws::handle_ws_connection,
 };
 
@@ -47,6 +47,15 @@ async fn authenticate_with_headers(
 ) -> Result<AuthenticatedUser, ApiError> {
     let token = bearer_token_from_headers(headers)
         .ok_or_else(|| ApiError::unauthorized("missing Authorization: Bearer token".to_string()))?;
+    // A test-only credential exercises the public router without a PostgreSQL dependency.
+    #[cfg(test)]
+    if token == "catalog-test-token" {
+        return Ok(AuthenticatedUser {
+            id: 1,
+            name: "catalog-test".to_string(),
+            is_admin: false,
+        });
+    }
     authenticate_token(&state.pool, &token).await
 }
 
@@ -179,8 +188,8 @@ pub async fn dj_voice_model_info(
     headers: HeaderMap,
 ) -> Result<Json<DjModelInfoResponse>, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_model_info_response(
-        state.dj_voice_model.as_ref(),
+    dj_voice_model_info_response(
+        state.dj_voice_catalog.default_model(),
         "AI DJ voice model is not configured on this server",
     )
 }
@@ -191,8 +200,75 @@ pub async fn dj_voice_model_download(
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_model_download_response(
-        state.dj_voice_model.as_ref(),
+    dj_voice_model_download_by_id_response(
+        &state.dj_voice_catalog,
+        state
+            .dj_voice_catalog
+            .default_id
+            .as_deref()
+            .unwrap_or_default(),
+        "AI DJ voice model is not configured on this server",
+        request,
+    )
+    .await
+}
+
+fn dj_voice_model_info_response(
+    model: Option<&DjVoiceModel>,
+    not_configured_message: &str,
+) -> Result<Json<DjModelInfoResponse>, ApiError> {
+    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
+    Ok(Json(DjModelInfoResponse {
+        version: model.descriptor.version.clone(),
+        size_bytes: model.descriptor.size_bytes,
+        sha256: model.descriptor.sha256.clone(),
+    }))
+}
+
+fn dj_voice_catalog_response(catalog: &DjVoiceCatalog) -> Json<DjVoiceCatalogResponse> {
+    Json(DjVoiceCatalogResponse {
+        default_id: catalog.default_id.clone(),
+        voices: catalog
+            .voices
+            .iter()
+            .map(|voice| voice.descriptor.clone())
+            .collect(),
+    })
+}
+
+async fn dj_voice_model_download_by_id_response(
+    catalog: &DjVoiceCatalog,
+    voice_id: &str,
+    not_configured_message: &str,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let model = catalog
+        .find(voice_id)
+        .ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
+    match ServeFile::new(model.path()).oneshot(request).await {
+        Ok(response) => Ok(response.into_response()),
+        Err(err) => match err {},
+    }
+}
+
+pub async fn dj_voice_models(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+) -> Result<Json<DjVoiceCatalogResponse>, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    Ok(dj_voice_catalog_response(&state.dj_voice_catalog))
+}
+
+pub async fn dj_voice_model_download_by_id(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+    Path(voice_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    dj_voice_model_download_by_id_response(
+        &state.dj_voice_catalog,
+        &voice_id,
         "AI DJ voice model is not configured on this server",
         request,
     )
@@ -406,7 +482,7 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:password@localhost/database")
             .expect("create lazy pool");
-        let state = Arc::new(AppContext::new(pool, None, None));
+        let state = Arc::new(AppContext::new(pool, None, DjVoiceCatalog::default()));
 
         let error = match dj_voice_model_info(State(state), HeaderMap::new()).await {
             Err(error) => error,
@@ -457,5 +533,132 @@ mod tests {
             b"model"
         );
         fs::remove_file(path).expect("remove voice model fixture");
+    }
+
+    #[tokio::test]
+    async fn catalog_route_requires_auth_and_downloads_only_known_id() {
+        let (path, model) = voice_fixture();
+        let fixture_path = path.clone();
+        let catalog = DjVoiceCatalog {
+            default_id: Some("deep".to_string()),
+            voices: vec![DjVoiceModel::new(
+                DjVoiceDescriptor {
+                    id: "deep".to_string(),
+                    name: "Deep".to_string(),
+                    version: model.version,
+                    size_bytes: model.size_bytes,
+                    sha256: model.sha256,
+                },
+                path,
+            )],
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .expect("create lazy pool");
+        let app = crate::app::build_router(
+            Arc::new(AppContext::new(pool, None, catalog)),
+            Vec::new(),
+            1024,
+        );
+
+        let error = dj_voice_models(
+            State(Arc::new(AppContext::new(
+                sqlx::postgres::PgPoolOptions::new()
+                    .connect_lazy("postgres://user:password@localhost/database")
+                    .expect("create lazy pool"),
+                None,
+                DjVoiceCatalog::default(),
+            ))),
+            HeaderMap::new(),
+        )
+        .await
+        .expect_err("catalog requires authorization");
+        assert_eq!(error.into_response().status(), StatusCode::UNAUTHORIZED);
+
+        let catalog_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dj-voice-models")
+                    .header(header::AUTHORIZATION, "Bearer catalog-test-token")
+                    .body(Body::empty())
+                    .expect("build catalog request"),
+            )
+            .await
+            .expect("catalog response");
+        assert_eq!(catalog_response.status(), StatusCode::OK);
+        let catalog_json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(catalog_response.into_body(), usize::MAX)
+                .await
+                .expect("read catalog response"),
+        )
+        .expect("parse catalog JSON");
+        assert_eq!(catalog_json["default_id"], "deep");
+        assert!(catalog_json["voices"][0].get("path").is_none());
+
+        let known_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/dj-voice-models/deep/download")
+                    .header(header::AUTHORIZATION, "Bearer catalog-test-token")
+                    .body(Body::empty())
+                    .expect("build known download request"),
+            )
+            .await
+            .expect("known download response");
+        assert_eq!(known_response.status(), StatusCode::OK);
+
+        for voice_id in ["missing", "-bad"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/dj-voice-models/{voice_id}/download"))
+                        .header(header::AUTHORIZATION, "Bearer catalog-test-token")
+                        .body(Body::empty())
+                        .expect("build unknown download request"),
+                )
+                .await
+                .expect("unknown download response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            let error_json: serde_json::Value = serde_json::from_slice(
+                &to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("read unknown download response"),
+            )
+            .expect("parse unknown download JSON");
+            assert_eq!(error_json["error"]["code"], "not_found");
+            assert_eq!(
+                error_json["error"]["message"],
+                "AI DJ voice model is not configured on this server"
+            );
+        }
+
+        fs::remove_file(fixture_path).expect("remove voice model fixture");
+    }
+
+    #[test]
+    fn legacy_voice_model_compatibility() {
+        let model = DjVoiceModel::new(
+            DjVoiceDescriptor {
+                id: "default".to_string(),
+                name: "Default".to_string(),
+                version: "voice-v1".to_string(),
+                size_bytes: 20,
+                sha256: "sha".to_string(),
+            },
+            std::path::PathBuf::from("/models/voice.zip"),
+        );
+        let catalog = DjVoiceCatalog {
+            default_id: Some("default".to_string()),
+            voices: vec![model],
+        };
+        let response = dj_voice_model_info_response(
+            catalog.default_model(),
+            "AI DJ voice model is not configured on this server",
+        )
+        .expect("legacy endpoint resolves catalog default");
+        assert_eq!(response.0.version, "voice-v1");
     }
 }
