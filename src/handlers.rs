@@ -19,9 +19,9 @@ use crate::{
     errors::ApiError,
     models::{
         AuthenticatedUser, CreateTokenRequest, CreateUserRequest, DjModelInfoResponse,
-        DjVoiceCatalogResponse, DjVoiceDescriptor, HealthResponse, Namespace, NamespacePayload,
-        OperationResponse, SetUserDisabledRequest, SnapshotPayload, SnapshotQuery,
-        TokenCreatedResponse, UpdateResponse, WsQuery, namespace_data,
+        DjVoiceCatalogResponse, HealthResponse, Namespace, NamespacePayload, OperationResponse,
+        SetUserDisabledRequest, SnapshotPayload, SnapshotQuery, TokenCreatedResponse,
+        UpdateResponse, WsQuery, namespace_data,
     },
     state::{AppContext, DjModelInfo, DjVoiceCatalog, DjVoiceModel},
     ws::handle_ws_connection,
@@ -41,7 +41,7 @@ fn bearer_token_from_headers(headers: &HeaderMap) -> Option<String> {
     }
 }
 
-async fn authenticate_with_headers(
+pub(crate) async fn authenticate_with_headers(
     state: &Arc<AppContext>,
     headers: &HeaderMap,
 ) -> Result<AuthenticatedUser, ApiError> {
@@ -439,6 +439,7 @@ const ADMIN_LOGIN_HTML: &str = include_str!("../static/admin/login.html");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::DjVoiceDescriptor;
     use axum::body::to_bytes;
     use std::{
         fs,

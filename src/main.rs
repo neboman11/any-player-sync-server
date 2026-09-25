@@ -1,6 +1,8 @@
 mod app;
 mod config;
 mod db;
+mod dj_fact_sources;
+mod dj_facts;
 mod errors;
 mod handlers;
 mod models;

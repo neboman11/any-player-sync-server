@@ -91,6 +91,43 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
     .execute(pool)
     .await?;
 
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS dj_facts (
+            id BIGSERIAL PRIMARY KEY,
+            song_key TEXT NOT NULL,
+            artist_key TEXT NOT NULL,
+            song TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            claim TEXT NOT NULL,
+            source TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            evidence TEXT NOT NULL,
+            fingerprint TEXT NOT NULL UNIQUE,
+            verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_dj_facts_identity ON dj_facts (song_key, artist_key)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS dj_fact_plays (
+            user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            event_id TEXT NOT NULL,
+            fact_id BIGINT NOT NULL REFERENCES dj_facts(id) ON DELETE CASCADE,
+            played_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (user_id, event_id)
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_dj_fact_plays_reuse ON dj_fact_plays (user_id, fact_id, played_at DESC)")
+        .execute(pool).await?;
+
     // Migrate legacy sync_document data into user_sync_document if the old table
     // exists. This preserves existing snapshot state for upgraded databases.
     let (legacy_exists,): (bool,) = sqlx::query_as(

@@ -13,7 +13,7 @@ use tower_http::{
 };
 use tracing::warn;
 
-use crate::{handlers, state::AppContext};
+use crate::{dj_facts, handlers, state::AppContext};
 
 pub fn build_router(
     state: Arc<AppContext>,
@@ -68,6 +68,11 @@ pub fn build_router(
             get(handlers::get_snapshot).put(handlers::put_snapshot),
         )
         .route("/v1/dj-model/info", get(handlers::dj_model_info))
+        .route(
+            "/v1/dj-facts",
+            get(dj_facts::lookup).post(dj_facts::contribute),
+        )
+        .route("/v1/dj-facts/{id}/played", post(dj_facts::played))
         .route("/v1/dj-model/download", get(handlers::dj_model_download))
         .route(
             "/v1/dj-voice-model/info",
@@ -94,7 +99,7 @@ pub fn build_router(
             // Redact query strings from /v1/ws spans to avoid logging bearer
             // tokens that may be passed via the `token` query parameter.
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-                let uri = if request.uri().path() == "/v1/ws" {
+                let uri = if matches!(request.uri().path(), "/v1/ws" | "/v1/dj-facts") {
                     request.uri().path().to_owned()
                 } else {
                     request.uri().to_string()
