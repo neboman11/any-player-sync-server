@@ -143,13 +143,26 @@ fn check_musicbrainz(
         .get("artist-credit")
         .and_then(Value::as_array)
         .ok_or_else(|| invalid("artist credit missing"))?;
-    if !credited.iter().any(|v| {
-        v.get("artist")
-            .and_then(|v| v.get("name"))
-            .and_then(Value::as_str)
-            .map(key)
-            .as_deref()
-            == Some(key(artist).as_str())
+    if !credited.iter().any(|credit| {
+        let Some(entity) = credit.get("artist") else {
+            return false;
+        };
+        ["name", "sort-name"].iter().any(|field| {
+            entity
+                .get(*field)
+                .and_then(Value::as_str)
+                .is_some_and(|name| key(name) == key(artist))
+        }) || entity
+            .get("aliases")
+            .and_then(Value::as_array)
+            .is_some_and(|aliases| {
+                aliases.iter().any(|alias| {
+                    alias
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .is_some_and(|name| key(name) == key(artist))
+                })
+            })
     }) {
         return Err(invalid("artist credit does not match"));
     }
@@ -218,11 +231,20 @@ fn check_wikidata(
 }
 
 async fn fetch(client: &reqwest::Client, url: String) -> Result<Value, ApiError> {
-    let mut response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|_| ApiError::internal("source unavailable".into()))?;
+    let mut retries = 0;
+    let mut response = loop {
+        let response = client
+            .get(url.as_str())
+            .send()
+            .await
+            .map_err(|_| ApiError::internal("source unavailable".into()))?;
+        if response.status() != reqwest::StatusCode::SERVICE_UNAVAILABLE || retries == 2 {
+            break response;
+        }
+        drop(response);
+        tokio::time::sleep(Duration::from_millis(250_u64 << retries)).await;
+        retries += 1;
+    };
     if !response.status().is_success() {
         if response.status().is_server_error()
             || response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -307,6 +329,38 @@ pub async fn verify(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn source_fetch_retries_503() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let calls = observed.clone();
+                async move {
+                    if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (axum::http::StatusCode::SERVICE_UNAVAILABLE, "{}")
+                    } else {
+                        (axum::http::StatusCode::OK, r#"{"ok":true}"#)
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let result = fetch(&reqwest::Client::new(), url).await.unwrap();
+
+        server.abort();
+        assert_eq!(result["ok"], true);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
 
     const WIKIPEDIA: &str = r#"{"query":{"pages":{"42":{"title":"My Song","extract":"My Song was recorded by An Artist in 1998."}}}}"#;
     const MUSICBRAINZ: &str = r#"{"id":"12345678-1234-1234-1234-123456789abc","title":"My Song","artist-credit":[{"name":"An Artist","artist":{"id":"87654321-4321-4321-4321-cba987654321","name":"An Artist"}}],"first-release-date":"1998-03-04"}"#;
@@ -391,6 +445,34 @@ mod tests {
                 "An Artist",
                 "My Song was released on 2001-01-01.",
                 "My Song was released on 2001-01-01."
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn musicbrainz_accepts_verified_artist_alias() {
+        let page: Value = serde_json::from_str(r#"{"id":"12345678-1234-1234-1234-123456789abc","title":"My Song","artist-credit":[{"artist":{"name":"別名","sort-name":"An Artist"}}]}"#).unwrap();
+        let claim = "My Song is credited to An Artist.";
+        assert!(
+            check_musicbrainz(
+                &page,
+                "12345678-1234-1234-1234-123456789abc",
+                "My Song",
+                "An Artist",
+                claim,
+                claim
+            )
+            .is_ok()
+        );
+        assert!(
+            check_musicbrainz(
+                &page,
+                "12345678-1234-1234-1234-123456789abc",
+                "My Song",
+                "Other Artist",
+                claim,
+                claim
             )
             .is_err()
         );
