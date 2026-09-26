@@ -166,7 +166,7 @@ pub async fn contribute(
         identity_key(&input.evidence)
     );
     let fingerprint = format!("{:x}", Sha256::digest(normalized.as_bytes()));
-    let row = sqlx::query_as::<_, (i64, String, String, String, String, String, String, String, String, String)>(
+    let row = sqlx::query_as::<_, (i64, String, String, String, String, String, String, String, String)>(
         r#"INSERT INTO dj_facts (song_key, artist_key, song, artist, claim, source, source_id, source_url, evidence, fingerprint)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
            ON CONFLICT (fingerprint) DO UPDATE SET fingerprint = dj_facts.fingerprint
