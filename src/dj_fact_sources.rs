@@ -29,17 +29,28 @@ fn wiki_title_url(id: &str) -> String {
         .collect()
 }
 
+/// Wikipedia language edition for each accepted `wikipedia*` source name.
+fn wikipedia_lang(source: &str) -> Option<&'static str> {
+    match source {
+        "wikipedia" => Some("en"),
+        "wikipedia-ja" => Some("ja"),
+        "wikipedia-ko" => Some("ko"),
+        _ => None,
+    }
+}
+
 fn canonical(source: &str, id: &str) -> Option<String> {
     match source {
-        "wikipedia"
-            if !id.is_empty()
-                && id.len() <= 160
-                && id
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || " _-(),.'".contains(c)) =>
+        _ if wikipedia_lang(source).is_some()
+            && !id.is_empty()
+            && id.len() <= 160
+            && id
+                .chars()
+                .all(|c| c.is_alphanumeric() || " _-(),.'!?&:・".contains(c)) =>
         {
             Some(format!(
-                "https://en.wikipedia.org/wiki/{}",
+                "https://{}.wikipedia.org/wiki/{}",
+                wikipedia_lang(source)?,
                 wiki_title_url(id)
             ))
         }
@@ -287,14 +298,15 @@ pub async fn verify(
         .map_err(|_| ApiError::internal("source client unavailable".into()))?;
     let encoded = utf8_percent_encode(source_id, NON_ALPHANUMERIC);
     match source {
-        "wikipedia" => {
-            let page = fetch(&client, format!("https://en.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&titles={encoded}")).await?;
+        _ if wikipedia_lang(source).is_some() => {
+            let lang = wikipedia_lang(source).unwrap_or("en");
+            let page = fetch(&client, format!("https://{lang}.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext=1&format=json&titles={encoded}")).await?;
             check_wikipedia(&page, source_id, song, artist, evidence, claim)?;
         }
         "musicbrainz" => {
             let page = fetch(
                 &client,
-                format!("https://musicbrainz.org/ws/2/recording/{source_id}?inc=artists&fmt=json"),
+                format!("https://musicbrainz.org/ws/2/recording/{source_id}?inc=artists+aliases&fmt=json"),
             )
             .await?;
             check_musicbrainz(&page, source_id, song, artist, evidence, claim)?;
@@ -405,6 +417,52 @@ mod tests {
                 "My Song 2",
                 "My Song",
                 "An Artist",
+                unrelated,
+                unrelated
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn wikipedia_language_editions_have_canonical_urls() {
+        assert_eq!(
+            canonical("wikipedia-ja", "シルエット (KANA-BOONの曲)").as_deref(),
+            Some(
+                "https://ja.wikipedia.org/wiki/%E3%82%B7%E3%83%AB%E3%82%A8%E3%83%83%E3%83%88_%28KANA-BOON%E3%81%AE%E6%9B%B2%29"
+            )
+        );
+        assert_eq!(
+            canonical("wikipedia", "Hey Ya!").as_deref(),
+            Some("https://en.wikipedia.org/wiki/Hey_Ya%21")
+        );
+        assert!(canonical("wikipedia-ko", "Spring Snow").is_some());
+        assert!(canonical("wikipedia-fr", "Song").is_none());
+        assert!(canonical("wikipedia", "a/b").is_none());
+    }
+
+    #[test]
+    fn wikipedia_accepts_japanese_passage() {
+        let page: Value = serde_json::from_str(r#"{"query":{"pages":{"1":{"title":"シルエット (KANA-BOONの曲)","extract":"「シルエット」は、日本のロックバンドKANA-BOONの楽曲。2014年11月26日に発売された。"}}}}"#).unwrap();
+        let fact = "「シルエット」は、日本のロックバンドKANA-BOONの楽曲。";
+        assert!(
+            check_wikipedia(
+                &page,
+                "シルエット (KANA-BOONの曲)",
+                "シルエット",
+                "KANA-BOON",
+                fact,
+                fact
+            )
+            .is_ok()
+        );
+        let unrelated = "2014年11月26日に発売された。";
+        assert!(
+            check_wikipedia(
+                &page,
+                "シルエット (KANA-BOONの曲)",
+                "シルエット",
+                "KANA-BOON",
                 unrelated,
                 unrelated
             )

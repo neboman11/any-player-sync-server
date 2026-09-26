@@ -66,6 +66,74 @@ fn identity_key(value: &str) -> String {
         .to_lowercase()
 }
 
+/// Words that mark a trailing "(...)"/"[...]" as a release qualifier rather than part of the title.
+const TITLE_QUALIFIERS: &[&str] = &[
+    "feat",
+    "feat.",
+    "ft",
+    "ft.",
+    "featuring",
+    "with",
+    "from",
+    "remaster",
+    "remastered",
+    "version",
+    "live",
+    "remix",
+    "edit",
+    "mix",
+    "mono",
+    "stereo",
+    "acoustic",
+    "demo",
+    "instrumental",
+];
+
+/// Lookup keys for a player-supplied title: the title as given, plus the title with release
+/// qualifiers removed ("American Woman - 2024 Remaster", "Song (feat. X)"), since facts are
+/// stored under the source's canonical song title.
+fn song_keys(title: &str) -> Vec<String> {
+    let mut base = title.split(" - ").next().unwrap_or(title).trim_end();
+    while let Some(close) = base.chars().last().filter(|c| matches!(c, ')' | ']')) {
+        let open = if close == ')' { '(' } else { '[' };
+        let Some(start) = base.rfind(open) else { break };
+        let inner = base[start + 1..base.len() - 1].to_lowercase();
+        let qualifier = inner.trim().chars().all(|c| c.is_ascii_digit())
+            || inner
+                .split(|c: char| !c.is_alphanumeric() && c != '.')
+                .any(|word| TITLE_QUALIFIERS.contains(&word));
+        if !qualifier || start == 0 {
+            break;
+        }
+        base = base[..start].trim_end();
+    }
+    let mut keys = vec![identity_key(title)];
+    if !base.is_empty() && !keys.contains(&identity_key(base)) {
+        keys.push(identity_key(base));
+    }
+    keys
+}
+
+/// Lookup keys for a player-supplied artist: the string as given plus each credited artist of a
+/// multi-artist credit ("A, B & C"), since facts are stored under the source's credited artist.
+fn artist_keys(artist: &str) -> Vec<String> {
+    let mut parts = vec![artist.to_string()];
+    for sep in [",", "&", "、", " feat. ", " ft. ", " featuring "] {
+        parts = parts
+            .iter()
+            .flat_map(|part| part.split(sep).map(str::to_string).collect::<Vec<_>>())
+            .collect();
+    }
+    let mut keys = vec![identity_key(artist)];
+    for key in parts.iter().map(|p| identity_key(p)) {
+        if !key.is_empty() && !keys.contains(&key) {
+            keys.push(key);
+        }
+    }
+    keys.truncate(16);
+    keys
+}
+
 fn valid_uuid(value: &str) -> bool {
     value.len() == 36
         && value.chars().enumerate().all(|(i, c)| {
@@ -102,14 +170,14 @@ pub async fn lookup(
                SELECT MAX(played_at) AS last_used_at FROM dj_fact_plays
                WHERE user_id = $3 AND fact_id = f.id
            ) usage ON TRUE
-           WHERE f.song_key = $1 AND f.artist_key = $2
+           WHERE f.song_key = ANY($1) AND f.artist_key = ANY($2)
              AND (usage.last_used_at IS NULL OR usage.last_used_at <= NOW() - INTERVAL '30 days')
            ORDER BY (usage.last_used_at IS NULL) DESC,
              LEAST(1.0, LN(1 + EXTRACT(EPOCH FROM (NOW() - usage.last_used_at)) / 86400 - 30) / LN(366)) DESC NULLS LAST,
              f.verified_at DESC, f.id ASC
            LIMIT 1"#,
     )
-    .bind(identity_key(&query.song)).bind(identity_key(&query.artist)).bind(user.id)
+    .bind(song_keys(&query.song)).bind(artist_keys(&query.artist)).bind(user.id)
     .fetch_optional(&state.pool).await
     .map_err(|err| { tracing::error!(%err, "fact lookup failed"); ApiError::internal("fact lookup failed".into()) })?;
     Ok(Json(FactResponse {
@@ -252,6 +320,50 @@ mod tests {
     };
 
     #[test]
+    fn song_keys_add_title_without_release_qualifiers() {
+        assert_eq!(song_keys("Creep"), vec!["creep"]);
+        assert_eq!(
+            song_keys("American Woman - 2024 Remaster"),
+            vec!["american woman - 2024 remaster", "american woman"]
+        );
+        assert_eq!(
+            song_keys("The Game Of Love (feat. Michelle Branch)"),
+            vec![
+                "the game of love (feat. michelle branch)",
+                "the game of love"
+            ]
+        );
+        assert_eq!(
+            song_keys("Show Me The Meaning Of Being Lonely ( 1999 ) - Backstreet Boys")[1],
+            "show me the meaning of being lonely"
+        );
+        // Leading or non-qualifier parentheses are part of the title.
+        assert_eq!(song_keys("(Going Down) Love In An Elevator").len(), 1);
+        assert_eq!(song_keys("Sweet Dreams (Are Made of This)").len(), 1);
+    }
+
+    #[test]
+    fn artist_keys_add_each_credited_artist() {
+        assert_eq!(artist_keys("TWICE"), vec!["twice"]);
+        assert_eq!(
+            artist_keys("Reneé Rapp, Megan Thee Stallion"),
+            vec![
+                "reneé rapp, megan thee stallion",
+                "reneé rapp",
+                "megan thee stallion"
+            ]
+        );
+        assert_eq!(
+            artist_keys("George Thorogood & The Destroyers"),
+            vec![
+                "george thorogood & the destroyers",
+                "george thorogood",
+                "the destroyers"
+            ]
+        );
+    }
+
+    #[test]
     fn recovery_begins_only_after_thirty_days() {
         assert_eq!(recovery_score(29.999), None);
         assert_eq!(recovery_score(30.0), Some(0.0));
@@ -348,6 +460,20 @@ mod tests {
         );
         assert_eq!(
             lookup(State(state.clone()), headers(&second_token), Query(query()))
+                .await
+                .unwrap()
+                .0
+                .fact
+                .unwrap()
+                .id,
+            fact_id
+        );
+        let qualified = FactQuery {
+            song: format!("{suffix} - 2024 Remaster"),
+            artist: "Test Artist, Someone Else".into(),
+        };
+        assert_eq!(
+            lookup(State(state.clone()), headers(&second_token), Query(qualified))
                 .await
                 .unwrap()
                 .0
