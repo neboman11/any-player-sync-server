@@ -22,6 +22,9 @@ pub struct AppConfig {
     pub dj_model_path: Option<PathBuf>,
     /// Version label for the configured DJ model, set via `DJ_MODEL_VERSION` (used by clients for cache-busting).
     pub dj_model_version: String,
+    /// Optional operator-owned JSON script-model catalog, set with `DJ_MODELS_MANIFEST_PATH`.
+    /// When set, it replaces the single `DJ_MODEL_PATH` model.
+    pub dj_models_manifest_path: Option<PathBuf>,
     /// Path to the operator-provided AI DJ neural voice bundle (a zip containing a Piper/VITS
     /// `.onnx` model + `tokens.txt`), set via `DJ_VOICE_MODEL_PATH`.
     pub dj_voice_model_path: Option<PathBuf>,
@@ -92,6 +95,12 @@ impl AppConfig {
         let dj_model_version =
             std::env::var("DJ_MODEL_VERSION").unwrap_or_else(|_| "unversioned".to_string());
 
+        let dj_models_manifest_path = std::env::var("DJ_MODELS_MANIFEST_PATH")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+
         let dj_voice_model_path = std::env::var("DJ_VOICE_MODEL_PATH")
             .ok()
             .map(|value| value.trim().to_string())
@@ -117,6 +126,7 @@ impl AppConfig {
             admin_bootstrap_token,
             dj_model_path,
             dj_model_version,
+            dj_models_manifest_path,
             dj_voice_model_path,
             dj_voice_model_version,
             dj_voice_models_manifest_path,

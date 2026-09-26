@@ -32,6 +32,7 @@ Environment variables:
 - `ADMIN_BOOTSTRAP_TOKEN` (optional; if set, this token is activated for the bootstrap admin account)
 - `DJ_MODEL_PATH` (optional; absolute path to the on-device AI DJ model `.task` file - see "AI DJ model hosting" below)
 - `DJ_MODEL_VERSION` (default: `unversioned`; a label for the configured model, used by clients for cache-busting)
+- `DJ_MODELS_MANIFEST_PATH` (optional; path to the operator-owned AI DJ script-model catalog JSON - see "Script model catalog" below)
 - `DJ_VOICE_MODELS_MANIFEST_PATH` (optional; path to the operator-owned AI DJ voice catalog JSON - see "AI DJ neural voice hosting" below)
 - `DJ_VOICE_MODEL_PATH` (optional single-voice compatibility fallback; absolute path to an AI DJ Piper/VITS voice bundle `.zip`)
 - `DJ_VOICE_MODEL_VERSION` (default: `unversioned`; a label for the configured voice bundle, used by clients for cache-busting)
@@ -159,6 +160,44 @@ Endpoints (both require the same `Authorization: Bearer <token>` as the sync API
 - `GET /v1/dj-model/download` - streams the model file, honoring `Range` requests so an interrupted client download can resume.
 
 The file's sha256 is hashed once at server startup, not per-request.
+
+#### Script model catalog
+
+To let users pick between several script models, set `DJ_MODELS_MANIFEST_PATH` to an
+operator-owned JSON file. It follows the voice catalog rules below, with a `models` list,
+and each `path` must end in `.task` (run by MediaPipe) or `.litertlm` (run by LiteRT-LM):
+
+```json
+{
+  "default_id": "gemma3-1b",
+  "models": [
+    {
+      "id": "gemma3-1b",
+      "name": "Gemma 3 1B",
+      "version": "gemma3-1b-it-int4-v1",
+      "path": "/srv/any-player/dj-models/gemma3-1b-it-int4.task"
+    },
+    {
+      "id": "gemma-4-e2b",
+      "name": "Gemma 4 E2B",
+      "version": "gemma-4-E2B-it-2026-05-04",
+      "path": "/srv/any-player/dj-models/gemma-4-E2B-it.litertlm"
+    }
+  ]
+}
+```
+
+Gemma 4 E2B is published as `gemma-4-E2B-it.litertlm` in the
+`litert-community/gemma-4-E2B-it-litert-lm` Hugging Face repo (about 2.6 GB; about
+1.7 GB of RAM on the CPU backend). Its `-web.task` file is a WebGPU build and does not
+run on Android.
+
+Catalog endpoints (same auth):
+- `GET /v1/dj-models` - `{ "default_id", "models": [{ "id", "name", "version", "size_bytes", "sha256", "format" }] }`
+- `GET /v1/dj-models/{model_id}/download`
+
+Without a manifest, `DJ_MODEL_PATH` is served as a single model with ID `default`. The
+`/v1/dj-model/*` endpoints above always serve the catalog's default model.
 
 ### AI DJ neural voice hosting
 

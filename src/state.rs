@@ -4,15 +4,15 @@ use std::path::{Path, PathBuf};
 use sqlx::PgPool;
 use tokio::sync::{RwLock, broadcast};
 
-use crate::models::{DjVoiceDescriptor, UpdateEvent};
+use crate::models::{DjCatalogDescriptor, UpdateEvent};
 
 /// Capacity per-user broadcast channel. Slow WebSocket clients that fall more
 /// than this many messages behind will receive a Lagged error and must refresh
 /// via a full snapshot.
 const USER_CHANNEL_CAPACITY: usize = 64;
 
-/// Metadata for the operator-configured AI DJ on-device model file, computed once
-/// at startup so repeated `/v1/dj-model/info` calls don't re-hash a large file.
+/// Metadata for an operator-configured AI DJ file, computed once at startup so repeated
+/// catalog/info calls don't re-hash a large file.
 #[derive(Clone)]
 pub struct DjModelInfo {
     pub path: PathBuf,
@@ -22,55 +22,61 @@ pub struct DjModelInfo {
 }
 
 #[derive(Clone)]
-pub struct DjVoiceModel {
-    pub descriptor: DjVoiceDescriptor,
+pub struct DjCatalogEntry {
+    pub descriptor: DjCatalogDescriptor,
     path: PathBuf,
 }
 
-impl DjVoiceModel {
-    pub(crate) fn new(descriptor: DjVoiceDescriptor, path: PathBuf) -> Self {
+impl DjCatalogEntry {
+    pub(crate) fn new(descriptor: DjCatalogDescriptor, path: PathBuf) -> Self {
         Self { descriptor, path }
     }
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
     }
+
+    /// The file extension (e.g. `task`/`litertlm`), validated at load for script models.
+    pub(crate) fn format(&self) -> String {
+        self.path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_string()
+    }
 }
 
 #[derive(Clone, Default)]
-pub struct DjVoiceCatalog {
+pub struct DjCatalog {
     pub default_id: Option<String>,
-    pub voices: Vec<DjVoiceModel>,
+    pub entries: Vec<DjCatalogEntry>,
 }
 
-impl DjVoiceCatalog {
-    pub fn default_model(&self) -> Option<&DjVoiceModel> {
+impl DjCatalog {
+    pub fn default_model(&self) -> Option<&DjCatalogEntry> {
         self.default_id.as_deref().and_then(|id| self.find(id))
     }
 
-    pub fn find(&self, id: &str) -> Option<&DjVoiceModel> {
-        self.voices.iter().find(|voice| voice.descriptor.id == id)
+    pub fn find(&self, id: &str) -> Option<&DjCatalogEntry> {
+        self.entries.iter().find(|entry| entry.descriptor.id == id)
     }
 }
 
 pub struct AppContext {
     pub pool: PgPool,
-    pub dj_model: Option<DjModelInfo>,
-    /// Operator-configured AI DJ neural voice bundle (Piper/VITS `.onnx` + `tokens.txt`
-    /// zipped together), served the same way as [dj_model] but via `/v1/dj-voice-model/*`.
-    pub dj_voice_catalog: DjVoiceCatalog,
+    /// Operator-configured AI DJ script-generation models (`.task`/`.litertlm`).
+    pub dj_model_catalog: DjCatalog,
+    /// Operator-configured AI DJ neural voice bundles (Piper/VITS `.onnx` + `tokens.txt`
+    /// zipped together).
+    pub dj_voice_catalog: DjCatalog,
     user_channels: RwLock<HashMap<i64, broadcast::Sender<UpdateEvent>>>,
 }
 
 impl AppContext {
-    pub fn new(
-        pool: PgPool,
-        dj_model: Option<DjModelInfo>,
-        dj_voice_catalog: DjVoiceCatalog,
-    ) -> Self {
+    pub fn new(pool: PgPool, dj_model_catalog: DjCatalog, dj_voice_catalog: DjCatalog) -> Self {
         Self {
             pool,
-            dj_model,
+            dj_model_catalog,
             dj_voice_catalog,
             user_channels: RwLock::new(HashMap::new()),
         }

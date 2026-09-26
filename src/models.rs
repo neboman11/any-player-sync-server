@@ -37,7 +37,7 @@ pub struct DjModelInfoResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DjVoiceDescriptor {
+pub struct DjCatalogDescriptor {
     pub id: String,
     pub name: String,
     pub version: String,
@@ -48,19 +48,36 @@ pub struct DjVoiceDescriptor {
 #[derive(Debug, Clone, Serialize)]
 pub struct DjVoiceCatalogResponse {
     pub default_id: Option<String>,
-    pub voices: Vec<DjVoiceDescriptor>,
+    pub voices: Vec<DjCatalogDescriptor>,
+}
+
+/// A script-generation model entry: the shared descriptor plus the model file's
+/// `format` (its `.task`/`.litertlm` extension), which picks the on-device runtime.
+#[derive(Debug, Clone, Serialize)]
+pub struct DjModelDescriptor {
+    #[serde(flatten)]
+    pub descriptor: DjCatalogDescriptor,
+    pub format: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DjModelCatalogResponse {
+    pub default_id: Option<String>,
+    pub models: Vec<DjModelDescriptor>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DjVoiceCatalogManifest {
+pub(crate) struct DjCatalogManifest {
     pub(crate) default_id: Option<String>,
-    pub(crate) voices: Vec<DjVoiceManifestEntry>,
+    /// `voices` in the voice manifest, `models` in the script-model manifest.
+    #[serde(alias = "voices", alias = "models")]
+    pub(crate) entries: Vec<DjManifestEntry>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct DjVoiceManifestEntry {
+pub(crate) struct DjManifestEntry {
     pub(crate) id: String,
     pub(crate) name: String,
     pub(crate) version: String,

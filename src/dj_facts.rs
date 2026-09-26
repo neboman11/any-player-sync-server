@@ -324,7 +324,7 @@ mod tests {
     use super::*;
     use crate::{
         db::{create_token, create_user, ensure_schema},
-        state::DjVoiceCatalog,
+        state::DjCatalog,
     };
     use axum::{
         extract::State,
@@ -424,8 +424,8 @@ mod tests {
             .bind("Test evidence").bind(&suffix).fetch_one(&pool).await.expect("fact");
         let state = Arc::new(AppContext::new(
             pool.clone(),
-            None,
-            DjVoiceCatalog::default(),
+            DjCatalog::default(),
+            DjCatalog::default(),
         ));
         let headers = |token: &str| {
             let mut headers = HeaderMap::new();

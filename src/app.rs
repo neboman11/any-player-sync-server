@@ -82,6 +82,11 @@ pub fn build_router(
             "/v1/dj-voice-model/download",
             get(handlers::dj_voice_model_download),
         )
+        .route("/v1/dj-models", get(handlers::dj_models))
+        .route(
+            "/v1/dj-models/{model_id}/download",
+            get(handlers::dj_model_download_by_id),
+        )
         .route("/v1/dj-voice-models", get(handlers::dj_voice_models))
         .route(
             "/v1/dj-voice-models/{voice_id}/download",

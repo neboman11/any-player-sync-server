@@ -22,9 +22,9 @@ use crate::{
     app::build_router,
     config::AppConfig,
     db::{ensure_bootstrap_admin, ensure_schema},
-    models::{DjVoiceCatalogManifest, DjVoiceDescriptor},
+    models::{DjCatalogDescriptor, DjCatalogManifest},
     shutdown::shutdown_signal,
-    state::{AppContext, DjModelInfo, DjVoiceCatalog, DjVoiceModel},
+    state::{AppContext, DjCatalog, DjCatalogEntry, DjModelInfo},
 };
 
 /// Hashes and stat's an operator-configured DJ model file once at startup (used for
@@ -85,19 +85,37 @@ fn is_safe_voice_component(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-fn load_dj_voice_catalog(
+/// Loads an operator-owned AI DJ catalog (`kind` is `voice` or `model`, for messages).
+/// Without a manifest, the legacy single-file `DJ_*_PATH`/`DJ_*_VERSION` config becomes a
+/// one-entry catalog with ID `default`. `formats`, when non-empty, restricts entry files
+/// to those extensions (script models must be a runtime-loadable `.task`/`.litertlm`).
+fn load_dj_catalog(
+    kind: &str,
     manifest_path: Option<&std::path::PathBuf>,
     legacy_path: Option<&std::path::PathBuf>,
     legacy_version: &str,
-) -> anyhow::Result<DjVoiceCatalog> {
+    formats: &[&str],
+) -> anyhow::Result<DjCatalog> {
+    let has_format = |path: &std::path::Path| {
+        formats.is_empty()
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| formats.contains(&ext))
+    };
     let Some(manifest_path) = manifest_path else {
-        if legacy_path.is_some() && !is_safe_voice_component(legacy_version) {
-            anyhow::bail!("legacy voice model version is unsafe");
+        if let Some(path) = legacy_path {
+            if !is_safe_voice_component(legacy_version) {
+                anyhow::bail!("legacy {kind} version is unsafe");
+            }
+            if !has_format(path) {
+                anyhow::bail!("legacy {kind} file must be one of: {}", formats.join(", "));
+            }
         }
-        let voices: Vec<_> = load_dj_model_info(legacy_path, legacy_version)
+        let entries: Vec<_> = load_dj_model_info(legacy_path, legacy_version)
             .map(|info| {
-                DjVoiceModel::new(
-                    DjVoiceDescriptor {
+                DjCatalogEntry::new(
+                    DjCatalogDescriptor {
                         id: "default".to_string(),
                         name: "Default".to_string(),
                         version: info.version,
@@ -109,67 +127,74 @@ fn load_dj_voice_catalog(
             })
             .into_iter()
             .collect();
-        return Ok(DjVoiceCatalog {
-            default_id: (!voices.is_empty()).then(|| "default".to_string()),
-            voices,
+        return Ok(DjCatalog {
+            default_id: (!entries.is_empty()).then(|| "default".to_string()),
+            entries,
         });
     };
 
     let source = std::fs::read_to_string(manifest_path).map_err(|err| {
         anyhow::anyhow!(
-            "failed to read voice manifest {}: {err}",
+            "failed to read {kind} manifest {}: {err}",
             manifest_path.display()
         )
     })?;
-    let manifest: DjVoiceCatalogManifest = serde_json::from_str(&source).map_err(|err| {
-        anyhow::anyhow!("invalid voice manifest {}: {err}", manifest_path.display())
+    let manifest: DjCatalogManifest = serde_json::from_str(&source).map_err(|err| {
+        anyhow::anyhow!("invalid {kind} manifest {}: {err}", manifest_path.display())
     })?;
 
     if let Some(default_id) = &manifest.default_id
         && !is_safe_voice_component(default_id)
     {
-        anyhow::bail!("voice manifest default_id is unsafe");
+        anyhow::bail!("{kind} manifest default_id is unsafe");
     }
 
     let mut ids = HashSet::new();
-    for voice in &manifest.voices {
-        if !is_safe_voice_component(&voice.id) || !is_safe_voice_component(&voice.version) {
-            anyhow::bail!("voice manifest contains an unsafe id or version");
+    for entry in &manifest.entries {
+        if !is_safe_voice_component(&entry.id) || !is_safe_voice_component(&entry.version) {
+            anyhow::bail!("{kind} manifest contains an unsafe id or version");
         }
-        if !voice.path.is_absolute() {
-            anyhow::bail!("voice manifest bundle paths must be absolute");
+        if !entry.path.is_absolute() {
+            anyhow::bail!("{kind} manifest paths must be absolute");
         }
-        let metadata = std::fs::metadata(&voice.path).map_err(|err| {
+        if !has_format(&entry.path) {
+            anyhow::bail!(
+                "{kind} manifest file {} must be one of: {}",
+                entry.path.display(),
+                formats.join(", ")
+            );
+        }
+        let metadata = std::fs::metadata(&entry.path).map_err(|err| {
             anyhow::anyhow!(
-                "voice manifest bundle {} is unavailable: {err}",
-                voice.path.display()
+                "{kind} manifest file {} is unavailable: {err}",
+                entry.path.display()
             )
         })?;
         if !metadata.is_file() {
             anyhow::bail!(
-                "voice manifest bundle {} is not a regular file",
-                voice.path.display()
+                "{kind} manifest file {} is not a regular file",
+                entry.path.display()
             );
         }
-        if !ids.insert(voice.id.as_str()) {
-            anyhow::bail!("voice manifest contains duplicate id '{}'", voice.id);
+        if !ids.insert(entry.id.as_str()) {
+            anyhow::bail!("{kind} manifest contains duplicate id '{}'", entry.id);
         }
     }
     if let Some(default_id) = &manifest.default_id
         && !ids.contains(default_id.as_str())
     {
-        anyhow::bail!("voice manifest default_id is not in voices");
+        anyhow::bail!("{kind} manifest default_id is not in the manifest");
     }
 
-    let voices = manifest
-        .voices
+    let entries = manifest
+        .entries
         .into_iter()
-        .filter_map(|voice| {
-            let info = load_dj_model_info(Some(&voice.path), &voice.version)?;
-            Some(DjVoiceModel::new(
-                DjVoiceDescriptor {
-                    id: voice.id,
-                    name: voice.name,
+        .filter_map(|entry| {
+            let info = load_dj_model_info(Some(&entry.path), &entry.version)?;
+            Some(DjCatalogEntry::new(
+                DjCatalogDescriptor {
+                    id: entry.id,
+                    name: entry.name,
                     version: info.version,
                     size_bytes: info.size_bytes,
                     sha256: info.sha256,
@@ -178,20 +203,45 @@ fn load_dj_voice_catalog(
             ))
         })
         .collect::<Vec<_>>();
-    if voices.is_empty() {
-        anyhow::bail!("voice manifest has no usable bundles");
+    if entries.is_empty() {
+        anyhow::bail!("{kind} manifest has no usable files");
     }
     if let Some(default_id) = &manifest.default_id
-        && !voices
+        && !entries
             .iter()
-            .any(|voice| voice.descriptor.id == *default_id)
+            .any(|entry| entry.descriptor.id == *default_id)
     {
-        anyhow::bail!("voice manifest default_id bundle is unavailable");
+        anyhow::bail!("{kind} manifest default_id file is unavailable");
     }
-    Ok(DjVoiceCatalog {
+    Ok(DjCatalog {
         default_id: manifest.default_id,
-        voices,
+        entries,
     })
+}
+
+fn load_dj_voice_catalog(
+    manifest_path: Option<&std::path::PathBuf>,
+    legacy_path: Option<&std::path::PathBuf>,
+    legacy_version: &str,
+) -> anyhow::Result<DjCatalog> {
+    load_dj_catalog("voice", manifest_path, legacy_path, legacy_version, &[])
+}
+
+/// File extensions the Android app can run: MediaPipe `.task` or LiteRT-LM `.litertlm`.
+const DJ_MODEL_FORMATS: &[&str] = &["task", "litertlm"];
+
+fn load_dj_model_catalog(
+    manifest_path: Option<&std::path::PathBuf>,
+    legacy_path: Option<&std::path::PathBuf>,
+    legacy_version: &str,
+) -> anyhow::Result<DjCatalog> {
+    load_dj_catalog(
+        "model",
+        manifest_path,
+        legacy_path,
+        legacy_version,
+        DJ_MODEL_FORMATS,
+    )
 }
 
 #[tokio::main]
@@ -226,34 +276,29 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
 
-    let dj_model = load_dj_model_info(config.dj_model_path.as_ref(), &config.dj_model_version);
-    if config.dj_model_path.is_some() && dj_model.is_none() {
-        warn!(
-            "DJ_MODEL_PATH was set but could not be loaded - AI DJ model endpoints will report not-configured"
-        );
-    } else if let Some(ref model) = dj_model {
-        info!(version = %model.version, size_bytes = model.size_bytes, "DJ model loaded");
-    }
+    let dj_model_catalog = load_dj_model_catalog(
+        config.dj_models_manifest_path.as_ref(),
+        config.dj_model_path.as_ref(),
+        &config.dj_model_version,
+    )?;
+    info!(
+        default_id = ?dj_model_catalog.default_id,
+        models = dj_model_catalog.entries.len(),
+        "DJ model catalog loaded"
+    );
 
     let dj_voice_catalog = load_dj_voice_catalog(
         config.dj_voice_models_manifest_path.as_ref(),
         config.dj_voice_model_path.as_ref(),
         &config.dj_voice_model_version,
     )?;
-    if let Some(ref default_id) = dj_voice_catalog.default_id {
-        info!(
-            %default_id,
-            voices = dj_voice_catalog.voices.len(),
-            "DJ voice catalog loaded"
-        );
-    } else {
-        info!(
-            voices = dj_voice_catalog.voices.len(),
-            "DJ voice catalog loaded"
-        );
-    }
+    info!(
+        default_id = ?dj_voice_catalog.default_id,
+        voices = dj_voice_catalog.entries.len(),
+        "DJ voice catalog loaded"
+    );
 
-    let state = Arc::new(AppContext::new(pool, dj_model, dj_voice_catalog));
+    let state = Arc::new(AppContext::new(pool, dj_model_catalog, dj_voice_catalog));
 
     let app = build_router(state, config.cors_allowed_origins, config.max_body_size);
 
@@ -268,7 +313,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{load_dj_model_info, load_dj_voice_catalog};
+    use super::{load_dj_model_catalog, load_dj_model_info, load_dj_voice_catalog};
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
@@ -358,5 +403,33 @@ mod tests {
         fs::write(&bundle, b"voice-model-fixture\n").expect("write legacy voice bundle");
         assert!(load_dj_voice_catalog(None, Some(&bundle), "../escape").is_err());
         fs::remove_file(bundle).expect("remove legacy voice bundle");
+    }
+
+    #[test]
+    fn model_manifest_accepts_only_runtime_formats() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after Unix epoch")
+            .as_nanos();
+        let manifest = std::env::temp_dir().join(format!("any-player-model-manifest-{stamp}"));
+        for (extension, accepted) in [("litertlm", true), ("task", true), ("zip", false)] {
+            let model = std::env::temp_dir().join(format!("any-player-model-{stamp}.{extension}"));
+            fs::write(&model, b"model-fixture\n").expect("write model fixture");
+            fs::write(
+                &manifest,
+                format!(
+                    r#"{{"default_id":"gemma","models":[{{"id":"gemma","name":"Gemma","version":"v1","path":"{}"}}]}}"#,
+                    model.display()
+                ),
+            )
+            .expect("write model manifest");
+            let result = load_dj_model_catalog(Some(&manifest), None, "unversioned");
+            assert_eq!(result.is_ok(), accepted, "{extension}");
+            if let Ok(catalog) = result {
+                assert_eq!(catalog.entries[0].format(), extension);
+            }
+            fs::remove_file(model).expect("remove model fixture");
+        }
+        fs::remove_file(manifest).expect("remove model manifest");
     }
 }

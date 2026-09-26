@@ -18,12 +18,12 @@ use crate::{
     },
     errors::ApiError,
     models::{
-        AuthenticatedUser, CreateTokenRequest, CreateUserRequest, DjModelInfoResponse,
-        DjVoiceCatalogResponse, HealthResponse, Namespace, NamespacePayload, OperationResponse,
-        SetUserDisabledRequest, SnapshotPayload, SnapshotQuery, TokenCreatedResponse,
-        UpdateResponse, WsQuery, namespace_data,
+        AuthenticatedUser, CreateTokenRequest, CreateUserRequest, DjModelCatalogResponse,
+        DjModelDescriptor, DjModelInfoResponse, DjVoiceCatalogResponse, HealthResponse, Namespace,
+        NamespacePayload, OperationResponse, SetUserDisabledRequest, SnapshotPayload,
+        SnapshotQuery, TokenCreatedResponse, UpdateResponse, WsQuery, namespace_data,
     },
-    state::{AppContext, DjModelInfo, DjVoiceCatalog, DjVoiceModel},
+    state::{AppContext, DjCatalog, DjCatalogEntry},
     ws::handle_ws_connection,
 };
 
@@ -123,46 +123,14 @@ pub async fn put_snapshot(
     Ok(Json(snapshot))
 }
 
-/// Shared by [dj_model_info]/[dj_voice_model_info]: metadata (size + sha256) for
-/// whichever operator-configured on-device model file is asked about, so the Android
-/// client can decide whether it needs to (re)download before verifying a completed
-/// download. 404s if the server operator hasn't configured that particular model.
-fn dj_model_info_response(
-    model: Option<&DjModelInfo>,
-    not_configured_message: &str,
-) -> Result<Json<DjModelInfoResponse>, ApiError> {
-    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
-    Ok(Json(DjModelInfoResponse {
-        version: model.version.clone(),
-        size_bytes: model.size_bytes,
-        sha256: model.sha256.clone(),
-    }))
-}
-
-/// Shared by [dj_model_download]/[dj_voice_model_download]: streams whichever
-/// operator-configured model file is asked for. Delegates to `tower_http`'s
-/// `ServeFile`, which handles `Range` requests so the Android client can resume an
-/// interrupted download instead of restarting a large transfer from scratch.
-async fn dj_model_download_response(
-    model: Option<&DjModelInfo>,
-    not_configured_message: &str,
-    request: Request<Body>,
-) -> Result<Response, ApiError> {
-    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
-    match ServeFile::new(&model.path).oneshot(request).await {
-        Ok(response) => Ok(response.into_response()),
-        Err(err) => match err {},
-    }
-}
-
 pub async fn dj_model_info(
     State(state): State<Arc<AppContext>>,
     headers: HeaderMap,
 ) -> Result<Json<DjModelInfoResponse>, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_model_info_response(
-        state.dj_model.as_ref(),
-        "AI DJ model is not configured on this server",
+    dj_catalog_entry_info_response(
+        state.dj_model_catalog.default_model(),
+        DJ_MODEL_NOT_CONFIGURED,
     )
 }
 
@@ -172,13 +140,56 @@ pub async fn dj_model_download(
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_model_download_response(
-        state.dj_model.as_ref(),
-        "AI DJ model is not configured on this server",
+    dj_catalog_download_response(
+        &state.dj_model_catalog,
+        state
+            .dj_model_catalog
+            .default_id
+            .as_deref()
+            .unwrap_or_default(),
+        DJ_MODEL_NOT_CONFIGURED,
         request,
     )
     .await
 }
+
+pub async fn dj_models(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+) -> Result<Json<DjModelCatalogResponse>, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    let catalog = &state.dj_model_catalog;
+    Ok(Json(DjModelCatalogResponse {
+        default_id: catalog.default_id.clone(),
+        models: catalog
+            .entries
+            .iter()
+            .map(|entry| DjModelDescriptor {
+                descriptor: entry.descriptor.clone(),
+                format: entry.format(),
+            })
+            .collect(),
+    }))
+}
+
+pub async fn dj_model_download_by_id(
+    State(state): State<Arc<AppContext>>,
+    headers: HeaderMap,
+    Path(model_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    authenticate_with_headers(&state, &headers).await?;
+    dj_catalog_download_response(
+        &state.dj_model_catalog,
+        &model_id,
+        DJ_MODEL_NOT_CONFIGURED,
+        request,
+    )
+    .await
+}
+
+const DJ_MODEL_NOT_CONFIGURED: &str = "AI DJ model is not configured on this server";
+const DJ_VOICE_NOT_CONFIGURED: &str = "AI DJ voice model is not configured on this server";
 
 /// Metadata for the operator-configured AI DJ neural voice bundle (a zip containing
 /// the Piper/VITS `.onnx` model + `tokens.txt`; the shared `espeak-ng-data` phoneme
@@ -188,9 +199,9 @@ pub async fn dj_voice_model_info(
     headers: HeaderMap,
 ) -> Result<Json<DjModelInfoResponse>, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_voice_model_info_response(
+    dj_catalog_entry_info_response(
         state.dj_voice_catalog.default_model(),
-        "AI DJ voice model is not configured on this server",
+        DJ_VOICE_NOT_CONFIGURED,
     )
 }
 
@@ -200,52 +211,45 @@ pub async fn dj_voice_model_download(
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_voice_model_download_by_id_response(
+    dj_catalog_download_response(
         &state.dj_voice_catalog,
         state
             .dj_voice_catalog
             .default_id
             .as_deref()
             .unwrap_or_default(),
-        "AI DJ voice model is not configured on this server",
+        DJ_VOICE_NOT_CONFIGURED,
         request,
     )
     .await
 }
 
-fn dj_voice_model_info_response(
-    model: Option<&DjVoiceModel>,
+/// Metadata (size + sha256) for a catalog's default entry, served by the legacy
+/// single-file `/info` endpoints. 404s if the operator hasn't configured one.
+fn dj_catalog_entry_info_response(
+    entry: Option<&DjCatalogEntry>,
     not_configured_message: &str,
 ) -> Result<Json<DjModelInfoResponse>, ApiError> {
-    let model = model.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
+    let entry = entry.ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
     Ok(Json(DjModelInfoResponse {
-        version: model.descriptor.version.clone(),
-        size_bytes: model.descriptor.size_bytes,
-        sha256: model.descriptor.sha256.clone(),
+        version: entry.descriptor.version.clone(),
+        size_bytes: entry.descriptor.size_bytes,
+        sha256: entry.descriptor.sha256.clone(),
     }))
 }
 
-fn dj_voice_catalog_response(catalog: &DjVoiceCatalog) -> Json<DjVoiceCatalogResponse> {
-    Json(DjVoiceCatalogResponse {
-        default_id: catalog.default_id.clone(),
-        voices: catalog
-            .voices
-            .iter()
-            .map(|voice| voice.descriptor.clone())
-            .collect(),
-    })
-}
-
-async fn dj_voice_model_download_by_id_response(
-    catalog: &DjVoiceCatalog,
-    voice_id: &str,
+/// Streams a catalog entry's file. Delegates to `tower_http`'s `ServeFile`, which
+/// handles `Range` requests so a client can resume an interrupted large download.
+async fn dj_catalog_download_response(
+    catalog: &DjCatalog,
+    id: &str,
     not_configured_message: &str,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
-    let model = catalog
-        .find(voice_id)
+    let entry = catalog
+        .find(id)
         .ok_or_else(|| ApiError::not_found(not_configured_message.to_string()))?;
-    match ServeFile::new(model.path()).oneshot(request).await {
+    match ServeFile::new(entry.path()).oneshot(request).await {
         Ok(response) => Ok(response.into_response()),
         Err(err) => match err {},
     }
@@ -256,7 +260,15 @@ pub async fn dj_voice_models(
     headers: HeaderMap,
 ) -> Result<Json<DjVoiceCatalogResponse>, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    Ok(dj_voice_catalog_response(&state.dj_voice_catalog))
+    let catalog = &state.dj_voice_catalog;
+    Ok(Json(DjVoiceCatalogResponse {
+        default_id: catalog.default_id.clone(),
+        voices: catalog
+            .entries
+            .iter()
+            .map(|entry| entry.descriptor.clone())
+            .collect(),
+    }))
 }
 
 pub async fn dj_voice_model_download_by_id(
@@ -266,10 +278,10 @@ pub async fn dj_voice_model_download_by_id(
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     authenticate_with_headers(&state, &headers).await?;
-    dj_voice_model_download_by_id_response(
+    dj_catalog_download_response(
         &state.dj_voice_catalog,
         &voice_id,
-        "AI DJ voice model is not configured on this server",
+        DJ_VOICE_NOT_CONFIGURED,
         request,
     )
     .await
@@ -439,38 +451,55 @@ const ADMIN_LOGIN_HTML: &str = include_str!("../static/admin/login.html");
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::DjVoiceDescriptor;
+    use crate::models::DjCatalogDescriptor;
     use axum::body::to_bytes;
     use std::{
         fs,
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    fn voice_model(path: std::path::PathBuf) -> DjModelInfo {
-        DjModelInfo {
+    fn catalog_entry(id: &str, path: std::path::PathBuf) -> DjCatalogEntry {
+        DjCatalogEntry::new(
+            DjCatalogDescriptor {
+                id: id.to_string(),
+                name: "Deep".to_string(),
+                version: "voice-v1".to_string(),
+                size_bytes: 20,
+                sha256: "590cde0323c8ece1ed91c67448110d2247fe64708ce2310d1e988df0d8e3c0bb"
+                    .to_string(),
+            },
             path,
-            version: "voice-v1".to_string(),
-            size_bytes: 20,
-            sha256: "590cde0323c8ece1ed91c67448110d2247fe64708ce2310d1e988df0d8e3c0bb".to_string(),
+        )
+    }
+
+    fn catalog_of(entry: DjCatalogEntry) -> DjCatalog {
+        DjCatalog {
+            default_id: Some(entry.descriptor.id.clone()),
+            entries: vec![entry],
         }
     }
 
-    fn voice_fixture() -> (std::path::PathBuf, DjModelInfo) {
+    fn fixture_path(extension: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "any-player-voice-model-{}",
+            "any-player-dj-fixture-{}.{extension}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock is after the Unix epoch")
                 .as_nanos()
         ));
-        fs::write(&path, b"voice-model-fixture\n").expect("write voice model fixture");
-        let model = voice_model(path.clone());
-        (path, model)
+        fs::write(&path, b"voice-model-fixture\n").expect("write model fixture");
+        path
+    }
+
+    fn lazy_pool() -> sqlx::PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:password@localhost/database")
+            .expect("create lazy pool")
     }
 
     #[test]
     fn voice_model_info_is_not_found_when_unconfigured() {
-        let error = match dj_model_info_response(None, "voice model is not configured") {
+        let error = match dj_catalog_entry_info_response(None, "voice model is not configured") {
             Err(error) => error,
             Ok(_) => panic!("unconfigured voice model must be absent"),
         };
@@ -480,10 +509,11 @@ mod tests {
 
     #[tokio::test]
     async fn voice_model_info_requires_authorization() {
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://user:password@localhost/database")
-            .expect("create lazy pool");
-        let state = Arc::new(AppContext::new(pool, None, DjVoiceCatalog::default()));
+        let state = Arc::new(AppContext::new(
+            lazy_pool(),
+            DjCatalog::default(),
+            DjCatalog::default(),
+        ));
 
         let error = match dj_voice_model_info(State(state), HeaderMap::new()).await {
             Err(error) => error,
@@ -495,8 +525,11 @@ mod tests {
 
     #[test]
     fn voice_model_info_exposes_download_contract() {
-        let response = dj_model_info_response(
-            Some(&voice_model(std::path::PathBuf::from("/models/voice.zip"))),
+        let response = dj_catalog_entry_info_response(
+            Some(&catalog_entry(
+                "deep",
+                std::path::PathBuf::from("/models/voice.zip"),
+            )),
             "voice model is not configured",
         )
         .expect("configured voice model returns info")
@@ -514,16 +547,21 @@ mod tests {
 
     #[tokio::test]
     async fn voice_model_download_honors_byte_ranges() {
-        let (path, model) = voice_fixture();
+        let path = fixture_path("zip");
+        let catalog = catalog_of(catalog_entry("deep", path.clone()));
         let request = Request::builder()
             .header(header::RANGE, "bytes=6-10")
             .body(Body::empty())
             .expect("build range request");
 
-        let response =
-            dj_model_download_response(Some(&model), "voice model is not configured", request)
-                .await
-                .expect("serve voice model range");
+        let response = dj_catalog_download_response(
+            &catalog,
+            "deep",
+            "voice model is not configured",
+            request,
+        )
+        .await
+        .expect("serve voice model range");
 
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(
@@ -538,37 +576,19 @@ mod tests {
 
     #[tokio::test]
     async fn catalog_route_requires_auth_and_downloads_only_known_id() {
-        let (path, model) = voice_fixture();
-        let fixture_path = path.clone();
-        let catalog = DjVoiceCatalog {
-            default_id: Some("deep".to_string()),
-            voices: vec![DjVoiceModel::new(
-                DjVoiceDescriptor {
-                    id: "deep".to_string(),
-                    name: "Deep".to_string(),
-                    version: model.version,
-                    size_bytes: model.size_bytes,
-                    sha256: model.sha256,
-                },
-                path,
-            )],
-        };
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .connect_lazy("postgres://user:password@localhost/database")
-            .expect("create lazy pool");
+        let fixture_path = fixture_path("zip");
+        let catalog = catalog_of(catalog_entry("deep", fixture_path.clone()));
         let app = crate::app::build_router(
-            Arc::new(AppContext::new(pool, None, catalog)),
+            Arc::new(AppContext::new(lazy_pool(), DjCatalog::default(), catalog)),
             Vec::new(),
             1024,
         );
 
         let error = dj_voice_models(
             State(Arc::new(AppContext::new(
-                sqlx::postgres::PgPoolOptions::new()
-                    .connect_lazy("postgres://user:password@localhost/database")
-                    .expect("create lazy pool"),
-                None,
-                DjVoiceCatalog::default(),
+                lazy_pool(),
+                DjCatalog::default(),
+                DjCatalog::default(),
             ))),
             HeaderMap::new(),
         )
@@ -641,25 +661,63 @@ mod tests {
 
     #[test]
     fn legacy_voice_model_compatibility() {
-        let model = DjVoiceModel::new(
-            DjVoiceDescriptor {
-                id: "default".to_string(),
-                name: "Default".to_string(),
-                version: "voice-v1".to_string(),
-                size_bytes: 20,
-                sha256: "sha".to_string(),
-            },
+        let catalog = catalog_of(catalog_entry(
+            "default",
             std::path::PathBuf::from("/models/voice.zip"),
-        );
-        let catalog = DjVoiceCatalog {
-            default_id: Some("default".to_string()),
-            voices: vec![model],
-        };
-        let response = dj_voice_model_info_response(
+        ));
+        let response = dj_catalog_entry_info_response(
             catalog.default_model(),
             "AI DJ voice model is not configured on this server",
         )
         .expect("legacy endpoint resolves catalog default");
         assert_eq!(response.0.version, "voice-v1");
+    }
+
+    #[tokio::test]
+    async fn model_catalog_reports_format_and_downloads_by_id() {
+        let path = fixture_path("litertlm");
+        let app = crate::app::build_router(
+            Arc::new(AppContext::new(
+                lazy_pool(),
+                catalog_of(catalog_entry("gemma-4-e2b", path.clone())),
+                DjCatalog::default(),
+            )),
+            Vec::new(),
+            1024,
+        );
+        let request = |uri: &str| {
+            Request::builder()
+                .uri(uri)
+                .header(header::AUTHORIZATION, "Bearer catalog-test-token")
+                .body(Body::empty())
+                .expect("build request")
+        };
+
+        let response = app
+            .clone()
+            .oneshot(request("/v1/dj-models"))
+            .await
+            .expect("model catalog response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let json: serde_json::Value = serde_json::from_slice(
+            &to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read model catalog"),
+        )
+        .expect("parse model catalog");
+        assert_eq!(json["default_id"], "gemma-4-e2b");
+        assert_eq!(json["models"][0]["id"], "gemma-4-e2b");
+        assert_eq!(json["models"][0]["format"], "litertlm");
+        assert!(json["models"][0].get("path").is_none());
+
+        for (uri, status) in [
+            ("/v1/dj-models/gemma-4-e2b/download", StatusCode::OK),
+            ("/v1/dj-model/download", StatusCode::OK),
+            ("/v1/dj-models/missing/download", StatusCode::NOT_FOUND),
+        ] {
+            let response = app.clone().oneshot(request(uri)).await.expect("response");
+            assert_eq!(response.status(), status, "{uri}");
+        }
+        fs::remove_file(path).expect("remove model fixture");
     }
 }
