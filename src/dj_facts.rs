@@ -473,13 +473,17 @@ mod tests {
             artist: "Test Artist, Someone Else".into(),
         };
         assert_eq!(
-            lookup(State(state.clone()), headers(&second_token), Query(qualified))
-                .await
-                .unwrap()
-                .0
-                .fact
-                .unwrap()
-                .id,
+            lookup(
+                State(state.clone()),
+                headers(&second_token),
+                Query(qualified)
+            )
+            .await
+            .unwrap()
+            .0
+            .fact
+            .unwrap()
+            .id,
             fact_id
         );
         sqlx::query(
