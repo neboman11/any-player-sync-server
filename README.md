@@ -243,7 +243,18 @@ Set `DJ_VOICE_MODELS_MANIFEST_PATH` to an operator-owned JSON file:
 
 Every `path` is an absolute path on the server to an existing regular zip file.
 Each zip is a complete voice bundle containing a `.onnx` model and
-`tokens.txt`. Each `id`, `version`, and optional `default_id` is 1-128 ASCII
+`tokens.txt`. A Kokoro bundle also contains `voices.bin` and may include a
+`voice.json` that picks the speaker and pronunciation, so one multi-speaker model can
+back several catalog voices:
+
+```json
+{"speaker_id": 14, "speed": 1.0, "lang": "en-us", "lexicons": ["lexicon-us-en.txt"]}
+```
+
+`lexicons` name files inside the zip. `lang` is an espeak-ng voice from the app's bundled
+data (`en-us`, or `en` for British English). For example, the `kokoro-multi-lang-v1_0`
+release from sherpa-onnx's `tts-models` gives speaker 14 `am_fenrir`, 18 `am_puck`,
+3 `af_heart` and 26 `bm_george`. Each `id`, `version`, and optional `default_id` is 1-128 ASCII
 bytes, starts with an ASCII letter or digit, and otherwise contains only ASCII
 letters, digits, `.`, `_`, or `-`. IDs are unique, and `default_id`, when set,
 must match an entry. Omitting `default_id` is valid and leaves selection to the
