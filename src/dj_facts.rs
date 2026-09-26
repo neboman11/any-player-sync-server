@@ -10,7 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    dj_fact_sources, errors::ApiError, handlers::authenticate_with_headers, state::AppContext,
+    dj_fact_sources::{self, fold_dashes},
+    errors::ApiError,
+    handlers::authenticate_with_headers,
+    state::AppContext,
 };
 
 #[derive(Deserialize)]
@@ -66,6 +69,12 @@ fn identity_key(value: &str) -> String {
         .to_lowercase()
 }
 
+/// Key stored in song_key/artist_key and used for lookup: identity_key with dash variants folded.
+/// Fingerprints keep plain identity_key so already-stored facts still deduplicate.
+fn match_key(value: &str) -> String {
+    fold_dashes(&identity_key(value))
+}
+
 /// Words that mark a trailing "(...)"/"[...]" as a release qualifier rather than part of the title.
 const TITLE_QUALIFIERS: &[&str] = &[
     "feat",
@@ -87,6 +96,9 @@ const TITLE_QUALIFIERS: &[&str] = &[
     "acoustic",
     "demo",
     "instrumental",
+    "explicit",
+    "ver",
+    "ver.",
 ];
 
 /// Lookup keys for a player-supplied title: the title as given, plus the title with release
@@ -107,9 +119,9 @@ fn song_keys(title: &str) -> Vec<String> {
         }
         base = base[..start].trim_end();
     }
-    let mut keys = vec![identity_key(title)];
-    if !base.is_empty() && !keys.contains(&identity_key(base)) {
-        keys.push(identity_key(base));
+    let mut keys = vec![match_key(title)];
+    if !base.is_empty() && !keys.contains(&match_key(base)) {
+        keys.push(match_key(base));
     }
     keys
 }
@@ -124,8 +136,8 @@ fn artist_keys(artist: &str) -> Vec<String> {
             .flat_map(|part| part.split(sep).map(str::to_string).collect::<Vec<_>>())
             .collect();
     }
-    let mut keys = vec![identity_key(artist)];
-    for key in parts.iter().map(|p| identity_key(p)) {
+    let mut keys = vec![match_key(artist)];
+    for key in parts.iter().map(|p| match_key(p)) {
         if !key.is_empty() && !keys.contains(&key) {
             keys.push(key);
         }
@@ -240,7 +252,7 @@ pub async fn contribute(
            ON CONFLICT (fingerprint) DO UPDATE SET fingerprint = dj_facts.fingerprint
            RETURNING id, fingerprint, song, artist, claim, source, source_id, source_url, evidence"#,
     )
-    .bind(identity_key(&input.song)).bind(identity_key(&input.artist))
+    .bind(match_key(&input.song)).bind(match_key(&input.artist))
     .bind(&input.song).bind(&input.artist).bind(&input.claim).bind(&input.source)
     .bind(&input.source_id).bind(&source_url).bind(&input.evidence).bind(&fingerprint)
     .fetch_one(&state.pool).await
@@ -340,6 +352,18 @@ mod tests {
         // Leading or non-qualifier parentheses are part of the title.
         assert_eq!(song_keys("(Going Down) Love In An Elevator").len(), 1);
         assert_eq!(song_keys("Sweet Dreams (Are Made of This)").len(), 1);
+    }
+
+    #[test]
+    fn keys_fold_dashes_and_strip_version_markers() {
+        assert_eq!(
+            artist_keys("Bachman\u{2013}Turner Overdrive"),
+            vec!["bachman-turner overdrive"]
+        );
+        assert_eq!(
+            song_keys("Seven (feat. Latto) (Explicit Ver.)"),
+            vec!["seven (feat. latto) (explicit ver.)", "seven"]
+        );
     }
 
     #[test]

@@ -7,13 +7,26 @@ fn invalid(message: &str) -> ApiError {
     ApiError::bad_request(message.into())
 }
 
+/// Unicode hyphens and dashes that sources and players use interchangeably with ASCII '-'
+/// ("Bachman–Turner Overdrive" vs "Bachman-Turner Overdrive"). Keep in sync with the
+/// `translate()` backfill in db::ensure_schema.
+pub(crate) const DASHES: &[char] = &[
+    '\u{2010}', '\u{2011}', '\u{2012}', '\u{2013}', '\u{2014}', '\u{2015}',
+];
+
+pub(crate) fn fold_dashes(value: &str) -> String {
+    value.replace(DASHES, "-")
+}
+
 fn key(value: &str) -> String {
-    value
-        .replace('_', " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    fold_dashes(
+        &value
+            .replace('_', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase(),
+    )
 }
 
 fn wiki_title_url(id: &str) -> String {
@@ -467,6 +480,23 @@ mod tests {
                 unrelated
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn wikipedia_matches_artist_across_dash_variants() {
+        let page: Value = serde_json::from_str(r#"{"query":{"pages":{"1":{"title":"Takin' Care of Business","extract":"\"Takin' Care of Business\" is a song by Bachman\u2013Turner Overdrive."}}}}"#).unwrap();
+        let fact = "\"Takin' Care of Business\" is a song by Bachman\u{2013}Turner Overdrive.";
+        assert!(
+            check_wikipedia(
+                &page,
+                "Takin' Care of Business",
+                "Takin' Care Of Business",
+                "Bachman-Turner Overdrive",
+                fact,
+                fact
+            )
+            .is_ok()
         );
     }
 

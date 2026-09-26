@@ -114,6 +114,15 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
     )
     .execute(pool)
     .await?;
+    // Lookup keys fold Unicode dashes to '-' (dj_fact_sources::DASHES); rewrite older rows once.
+    sqlx::query(
+        r#"UPDATE dj_facts
+           SET song_key = translate(song_key, E'\u2010\u2011\u2012\u2013\u2014\u2015', '------'),
+               artist_key = translate(artist_key, E'\u2010\u2011\u2012\u2013\u2014\u2015', '------')
+           WHERE song_key ~ E'[\u2010-\u2015]' OR artist_key ~ E'[\u2010-\u2015]'"#,
+    )
+    .execute(pool)
+    .await?;
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS dj_fact_plays (
             user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
