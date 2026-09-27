@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use futures_util::future::try_join_all;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
 
@@ -59,6 +60,24 @@ impl Wikipedia {
     }
 
     pub async fn fetch(&self, track: &TrackRequest, scope: Scope) -> SourceResult {
+        join_concat(
+            self.langs
+                .iter()
+                .map(|(lang, http)| self.fetch_lang(lang, http, track, scope)),
+        )
+        .await
+    }
+
+    /// One language's song, album and individual-artist lookups, sequentially (they share
+    /// `http`'s rate limiter). Independent of the other languages, so `fetch` runs these
+    /// concurrently and concatenates the results in `self.langs` order.
+    async fn fetch_lang(
+        &self,
+        lang: &'static str,
+        http: &SourceHttp,
+        track: &TrackRequest,
+        scope: Scope,
+    ) -> SourceResult {
         let parts = artist_parts(&track.artist);
         let individuals: Vec<String> = if parts.len() > 1 {
             parts[1..].to_vec()
@@ -66,56 +85,54 @@ impl Wikipedia {
             parts.clone()
         };
         let mut docs = Vec::new();
-        for (lang, http) in &self.langs {
-            let names_artist = |text: &str| named_artist(text, &track.artist).is_some();
-            if scope.song
-                && let Some(d) = find(
+        let names_artist = |text: &str| named_artist(text, &track.artist).is_some();
+        if scope.song
+            && let Some(d) = find(
+                http,
+                lang,
+                &format!("{} {}", track.song, track.artist),
+                &track.song,
+                Subject::Song,
+                track,
+                names_artist,
+            )
+            .await?
+        {
+            docs.push(d);
+        }
+        if scope.album
+            && let Some(album) = &track.album
+            && let Some(d) = find(
+                http,
+                lang,
+                &format!("{album} {}", track.artist),
+                album,
+                Subject::Album,
+                track,
+                names_artist,
+            )
+            .await?
+        {
+            docs.push(d);
+        }
+        if scope.artist {
+            for artist in &individuals {
+                let one = TrackRequest {
+                    artist: artist.clone(),
+                    ..track.clone()
+                };
+                if let Some(d) = find(
                     http,
                     lang,
-                    &format!("{} {}", track.song, track.artist),
-                    &track.song,
-                    Subject::Song,
-                    track,
-                    names_artist,
+                    artist,
+                    artist,
+                    Subject::Artist,
+                    &one,
+                    is_artist_article,
                 )
                 .await?
-            {
-                docs.push(d);
-            }
-            if scope.album
-                && let Some(album) = &track.album
-                && let Some(d) = find(
-                    http,
-                    lang,
-                    &format!("{album} {}", track.artist),
-                    album,
-                    Subject::Album,
-                    track,
-                    names_artist,
-                )
-                .await?
-            {
-                docs.push(d);
-            }
-            if scope.artist {
-                for artist in &individuals {
-                    let one = TrackRequest {
-                        artist: artist.clone(),
-                        ..track.clone()
-                    };
-                    if let Some(d) = find(
-                        http,
-                        lang,
-                        artist,
-                        artist,
-                        Subject::Artist,
-                        &one,
-                        is_artist_article,
-                    )
-                    .await?
-                    {
-                        docs.push(d);
-                    }
+                {
+                    docs.push(d);
                 }
             }
         }
@@ -211,6 +228,17 @@ fn named_artist(text: &str, credit: &str) -> Option<String> {
         .find(|a| t.contains(&key(a)))
 }
 
+/// Runs one future per language concurrently and concatenates their `Vec` outputs in the
+/// futures' input order (not completion order). Short-circuits on the first `Err`, same as
+/// awaiting each future in sequence with `?` would.
+async fn join_concat<F>(futures: impl IntoIterator<Item = F>) -> SourceResult
+where
+    F: std::future::Future<Output = SourceResult>,
+{
+    let per_lang = try_join_all(futures).await?;
+    Ok(per_lang.into_iter().flatten().collect())
+}
+
 fn is_artist_article(text: &str) -> bool {
     let lead = key(&text.chars().take(600).collect::<String>());
     ARTIST_WORDS.iter().any(|w| lead.contains(w))
@@ -243,6 +271,64 @@ mod tests {
             cleaned.len() > 2000,
             "expected the full article, not a snippet"
         );
+    }
+
+    /// Fake per-language lookup: sleeps to stand in for network latency, then returns a
+    /// single tagged "document" (or an error) so `join_concat`'s behaviour can be checked
+    /// without any real HTTP calls.
+    async fn fake_lang(tag: &'static str, fail: bool, millis: u64) -> SourceResult {
+        tokio::time::sleep(Duration::from_millis(millis)).await;
+        if fail {
+            return Err(SourceError::Transient(format!("{tag} failed")));
+        }
+        Ok(vec![NewDocument {
+            source: tag.to_string(),
+            source_url: String::new(),
+            source_ref: String::new(),
+            subject: Subject::Song,
+            song: None,
+            album: None,
+            artist: String::new(),
+            title: String::new(),
+            lang: tag.to_string(),
+            body: String::new(),
+        }])
+    }
+
+    #[tokio::test]
+    async fn join_concat_runs_concurrently_and_preserves_input_order() {
+        let start = std::time::Instant::now();
+        let docs = join_concat([
+            fake_lang("en", false, 200),
+            fake_lang("ja", false, 200),
+            fake_lang("ko", false, 200),
+        ])
+        .await
+        .unwrap();
+
+        // Three 200ms lookups run concurrently, not 600ms sequentially.
+        assert!(
+            start.elapsed() < Duration::from_millis(450),
+            "expected concurrent execution, took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(
+            docs.iter().map(|d| d.lang.as_str()).collect::<Vec<_>>(),
+            vec!["en", "ja", "ko"],
+            "output must stay in input order regardless of completion order"
+        );
+    }
+
+    #[tokio::test]
+    async fn join_concat_fails_whole_fetch_if_any_lang_errors() {
+        let result = join_concat([
+            fake_lang("en", false, 50),
+            fake_lang("ja", true, 10),
+            fake_lang("ko", false, 50),
+        ])
+        .await;
+
+        assert!(matches!(result, Err(SourceError::Transient(_))));
     }
 
     #[test]

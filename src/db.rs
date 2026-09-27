@@ -32,7 +32,25 @@ fn generate_token() -> String {
     format!("ap_{random}")
 }
 
+/// Advisory lock key serializing concurrent `ensure_schema` callers (e.g. two server replicas,
+/// or two independent test connections, racing against a fresh database) so their
+/// `CREATE TABLE IF NOT EXISTS` statements don't collide on Postgres's catalog (duplicate key
+/// on `pg_type`). Distinct from `passages::schema::DJ_PASSAGE_SCHEMA_LOCK` \u2014 each schema takes
+/// its own lock key so the two `ensure` calls (base schema, passage schema) don't block each
+/// other unnecessarily.
+const BASE_SCHEMA_LOCK: i64 = 0x41505342; // "APSB" (AnyPlayer Sync Base)
+
 pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
+    // Every statement below is plain DDL/DML (no CREATE INDEX CONCURRENTLY, no VACUUM, nothing
+    // else that Postgres refuses inside a transaction), so the whole thing runs in one
+    // transaction guarded by an xact-scoped advisory lock, same pattern as
+    // `passages::schema::ensure`.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(BASE_SCHEMA_LOCK)
+        .execute(&mut *tx)
+        .await?;
+
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -44,7 +62,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
         );
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -61,7 +79,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
         );
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -70,7 +88,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
         ON auth_tokens(user_id);
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -88,7 +106,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
         );
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -107,12 +125,12 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
             verified_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )"#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_dj_facts_identity ON dj_facts (song_key, artist_key)",
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     // Lookup keys fold Unicode dashes to '-' (dj_fact_sources::DASHES); rewrite older rows once.
     sqlx::query(
@@ -121,7 +139,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
                artist_key = translate(artist_key, E'\u2010\u2011\u2012\u2013\u2014\u2015', '------')
            WHERE song_key ~ E'[\u2010-\u2015]' OR artist_key ~ E'[\u2010-\u2015]'"#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS dj_fact_plays (
@@ -132,10 +150,10 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
             PRIMARY KEY (user_id, event_id)
         )"#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_dj_fact_plays_reuse ON dj_fact_plays (user_id, fact_id, played_at DESC)")
-        .execute(pool).await?;
+        .execute(&mut *tx).await?;
 
     // Migrate legacy sync_document data into user_sync_document if the old table
     // exists. This preserves existing snapshot state for upgraded databases.
@@ -144,7 +162,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
         SELECT to_regclass('public.sync_document') IS NOT NULL AS exists
         "#,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     if legacy_exists {
@@ -159,7 +177,7 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .bind("default")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -188,10 +206,11 @@ pub async fn ensure_schema(pool: &PgPool) -> anyhow::Result<()> {
             "#,
         )
         .bind(default_user_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -780,4 +799,25 @@ pub async fn revoke_token(pool: &PgPool, token_id: i64) -> Result<(), ApiError> 
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two server replicas (or two test connections, as here) can both hit a fresh database
+    /// and race to run `ensure_schema`'s `CREATE TABLE IF NOT EXISTS` statements. Before the
+    /// `pg_advisory_xact_lock` in `ensure_schema`, this reproduced
+    /// "duplicate key value violates unique constraint pg_type_typname_nsp_index".
+    #[tokio::test]
+    async fn ensure_schema_is_safe_under_concurrent_callers() {
+        let Ok(url) = std::env::var("TEST_DATABASE_URL") else {
+            return;
+        };
+        let pool = PgPool::connect(&url).await.expect("test database");
+        let results = futures_util::future::join_all((0..8).map(|_| ensure_schema(&pool))).await;
+        for result in results {
+            result.expect("ensure_schema should succeed under concurrent callers");
+        }
+    }
 }
