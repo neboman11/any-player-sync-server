@@ -60,6 +60,23 @@ impl ApiError {
             message,
         }
     }
+
+    pub fn service_unavailable(message: String) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            code: "service_unavailable",
+            message,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn too_many_requests(message: String) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "too_many_requests",
+            message,
+        }
+    }
 }
 
 impl IntoResponse for ApiError {

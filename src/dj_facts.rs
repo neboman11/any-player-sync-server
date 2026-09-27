@@ -10,9 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    dj_fact_sources::{self, fold_dashes},
+    dj_fact_sources,
     errors::ApiError,
     handlers::authenticate_with_headers,
+    match_keys::{artist_keys, identity_key, match_key, song_keys},
     state::AppContext,
 };
 
@@ -59,91 +60,6 @@ pub struct Played {
 
 fn bounded(value: &str, max: usize) -> bool {
     !value.trim().is_empty() && value.len() <= max && !value.chars().any(char::is_control)
-}
-
-fn identity_key(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-/// Key stored in song_key/artist_key and used for lookup: identity_key with dash variants folded.
-/// Fingerprints keep plain identity_key so already-stored facts still deduplicate.
-fn match_key(value: &str) -> String {
-    fold_dashes(&identity_key(value))
-}
-
-/// Words that mark a trailing "(...)"/"[...]" as a release qualifier rather than part of the title.
-const TITLE_QUALIFIERS: &[&str] = &[
-    "feat",
-    "feat.",
-    "ft",
-    "ft.",
-    "featuring",
-    "with",
-    "from",
-    "remaster",
-    "remastered",
-    "version",
-    "live",
-    "remix",
-    "edit",
-    "mix",
-    "mono",
-    "stereo",
-    "acoustic",
-    "demo",
-    "instrumental",
-    "explicit",
-    "ver",
-    "ver.",
-];
-
-/// Lookup keys for a player-supplied title: the title as given, plus the title with release
-/// qualifiers removed ("American Woman - 2024 Remaster", "Song (feat. X)"), since facts are
-/// stored under the source's canonical song title.
-fn song_keys(title: &str) -> Vec<String> {
-    let mut base = title.split(" - ").next().unwrap_or(title).trim_end();
-    while let Some(close) = base.chars().last().filter(|c| matches!(c, ')' | ']')) {
-        let open = if close == ')' { '(' } else { '[' };
-        let Some(start) = base.rfind(open) else { break };
-        let inner = base[start + 1..base.len() - 1].to_lowercase();
-        let qualifier = inner.trim().chars().all(|c| c.is_ascii_digit())
-            || inner
-                .split(|c: char| !c.is_alphanumeric() && c != '.')
-                .any(|word| TITLE_QUALIFIERS.contains(&word));
-        if !qualifier || start == 0 {
-            break;
-        }
-        base = base[..start].trim_end();
-    }
-    let mut keys = vec![match_key(title)];
-    if !base.is_empty() && !keys.contains(&match_key(base)) {
-        keys.push(match_key(base));
-    }
-    keys
-}
-
-/// Lookup keys for a player-supplied artist: the string as given plus each credited artist of a
-/// multi-artist credit ("A, B & C"), since facts are stored under the source's credited artist.
-fn artist_keys(artist: &str) -> Vec<String> {
-    let mut parts = vec![artist.to_string()];
-    for sep in [",", "&", "、", " feat. ", " ft. ", " featuring "] {
-        parts = parts
-            .iter()
-            .flat_map(|part| part.split(sep).map(str::to_string).collect::<Vec<_>>())
-            .collect();
-    }
-    let mut keys = vec![match_key(artist)];
-    for key in parts.iter().map(|p| match_key(p)) {
-        if !key.is_empty() && !keys.contains(&key) {
-            keys.push(key);
-        }
-    }
-    keys.truncate(16);
-    keys
 }
 
 fn valid_uuid(value: &str) -> bool {
@@ -330,62 +246,6 @@ mod tests {
         extract::State,
         http::{HeaderValue, header},
     };
-
-    #[test]
-    fn song_keys_add_title_without_release_qualifiers() {
-        assert_eq!(song_keys("Creep"), vec!["creep"]);
-        assert_eq!(
-            song_keys("American Woman - 2024 Remaster"),
-            vec!["american woman - 2024 remaster", "american woman"]
-        );
-        assert_eq!(
-            song_keys("The Game Of Love (feat. Michelle Branch)"),
-            vec![
-                "the game of love (feat. michelle branch)",
-                "the game of love"
-            ]
-        );
-        assert_eq!(
-            song_keys("Show Me The Meaning Of Being Lonely ( 1999 ) - Backstreet Boys")[1],
-            "show me the meaning of being lonely"
-        );
-        // Leading or non-qualifier parentheses are part of the title.
-        assert_eq!(song_keys("(Going Down) Love In An Elevator").len(), 1);
-        assert_eq!(song_keys("Sweet Dreams (Are Made of This)").len(), 1);
-    }
-
-    #[test]
-    fn keys_fold_dashes_and_strip_version_markers() {
-        assert_eq!(
-            artist_keys("Bachman\u{2013}Turner Overdrive"),
-            vec!["bachman-turner overdrive"]
-        );
-        assert_eq!(
-            song_keys("Seven (feat. Latto) (Explicit Ver.)"),
-            vec!["seven (feat. latto) (explicit ver.)", "seven"]
-        );
-    }
-
-    #[test]
-    fn artist_keys_add_each_credited_artist() {
-        assert_eq!(artist_keys("TWICE"), vec!["twice"]);
-        assert_eq!(
-            artist_keys("Reneé Rapp, Megan Thee Stallion"),
-            vec![
-                "reneé rapp, megan thee stallion",
-                "reneé rapp",
-                "megan thee stallion"
-            ]
-        );
-        assert_eq!(
-            artist_keys("George Thorogood & The Destroyers"),
-            vec![
-                "george thorogood & the destroyers",
-                "george thorogood",
-                "the destroyers"
-            ]
-        );
-    }
 
     #[test]
     fn recovery_begins_only_after_thirty_days() {

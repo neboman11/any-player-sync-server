@@ -77,7 +77,7 @@ async fn authenticate_with_headers_or_query_token(
     ))
 }
 
-fn require_admin(user: &AuthenticatedUser) -> Result<(), ApiError> {
+pub(crate) fn require_admin(user: &AuthenticatedUser) -> Result<(), ApiError> {
     if user.is_admin {
         Ok(())
     } else {

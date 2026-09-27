@@ -4,7 +4,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderValue, Method, Request, header},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use tower_http::{
     compression::CompressionLayer,
@@ -13,7 +13,7 @@ use tower_http::{
 };
 use tracing::warn;
 
-use crate::{dj_facts, handlers, state::AppContext};
+use crate::{dj_facts, handlers, passages::api as passages_api, state::AppContext};
 
 pub fn build_router(
     state: Arc<AppContext>,
@@ -61,7 +61,7 @@ pub fn build_router(
         )
         .route(
             "/v1/admin/tokens/{token_id}",
-            axum::routing::delete(handlers::admin_revoke_token),
+            delete(handlers::admin_revoke_token),
         )
         .route(
             "/v1/snapshot",
@@ -92,6 +92,24 @@ pub fn build_router(
             "/v1/dj-voice-models/{voice_id}/download",
             get(handlers::dj_voice_model_download_by_id),
         )
+        .route("/v1/dj-passages", get(passages_api::lookup))
+        .route("/v1/dj-passages/played", post(passages_api::played))
+        .route(
+            "/v1/admin/dj-ingest",
+            get(passages_api::admin_list_jobs).post(passages_api::admin_ingest),
+        )
+        .route(
+            "/v1/admin/dj-ingest/misses",
+            get(passages_api::admin_misses),
+        )
+        .route(
+            "/v1/admin/dj-documents",
+            post(passages_api::admin_create_document).layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/v1/admin/dj-documents/{id}",
+            delete(passages_api::admin_delete_document),
+        )
         .route(
             "/v1/state/{namespace}",
             get(handlers::get_namespace).put(handlers::put_namespace),
@@ -104,7 +122,10 @@ pub fn build_router(
             // Redact query strings from /v1/ws spans to avoid logging bearer
             // tokens that may be passed via the `token` query parameter.
             TraceLayer::new_for_http().make_span_with(|request: &Request<_>| {
-                let uri = if matches!(request.uri().path(), "/v1/ws" | "/v1/dj-facts") {
+                let uri = if matches!(
+                    request.uri().path(),
+                    "/v1/ws" | "/v1/dj-facts" | "/v1/dj-passages"
+                ) {
                     request.uri().path().to_owned()
                 } else {
                     request.uri().to_string()

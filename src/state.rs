@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use sqlx::PgPool;
 use tokio::sync::{RwLock, broadcast};
@@ -69,6 +70,9 @@ pub struct AppContext {
     /// Operator-configured AI DJ neural voice bundles (Piper/VITS `.onnx` + `tokens.txt`
     /// zipped together).
     pub dj_voice_catalog: DjCatalog,
+    /// AI DJ passage retrieval and admin ingest (None when pgvector or the embedding model is
+    /// missing).
+    pub passages: Option<Arc<crate::passages::Passages>>,
     user_channels: RwLock<HashMap<i64, broadcast::Sender<UpdateEvent>>>,
 }
 
@@ -78,8 +82,15 @@ impl AppContext {
             pool,
             dj_model_catalog,
             dj_voice_catalog,
+            passages: None,
             user_channels: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Enables DJ passage retrieval and ingestion (None when pgvector or the model is missing).
+    pub fn with_passages(mut self, passages: Option<Arc<crate::passages::Passages>>) -> Self {
+        self.passages = passages;
+        self
     }
 
     /// Subscribe to update events for the given user. Creates a channel for

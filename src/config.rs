@@ -32,6 +32,16 @@ pub struct AppConfig {
     pub dj_voice_model_version: String,
     /// Optional operator-owned JSON catalog manifest, set with `DJ_VOICE_MODELS_MANIFEST_PATH`.
     pub dj_voice_models_manifest_path: Option<PathBuf>,
+    /// Directory with multilingual-e5-small `config.json`, `tokenizer.json`, `model.safetensors`
+    /// (`DJ_EMBEDDING_MODEL_DIR`). Unset or unloadable disables passage retrieval and ingestion.
+    #[allow(dead_code)]
+    pub dj_embedding_model_dir: Option<PathBuf>,
+    /// Genius API client access token (`GENIUS_TOKEN`); unset skips the Genius source.
+    #[allow(dead_code)]
+    pub genius_token: Option<String>,
+    /// Last.fm API key (`LASTFM_API_KEY`); unset skips the Last.fm source.
+    #[allow(dead_code)]
+    pub lastfm_api_key: Option<String>,
 }
 
 impl AppConfig {
@@ -116,6 +126,16 @@ impl AppConfig {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
 
+        let optional = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let dj_embedding_model_dir = optional("DJ_EMBEDDING_MODEL_DIR").map(PathBuf::from);
+        let genius_token = optional("GENIUS_TOKEN");
+        let lastfm_api_key = optional("LASTFM_API_KEY");
+
         Ok(Self {
             bind_address,
             database_url,
@@ -130,6 +150,9 @@ impl AppConfig {
             dj_voice_model_path,
             dj_voice_model_version,
             dj_voice_models_manifest_path,
+            dj_embedding_model_dir,
+            genius_token,
+            lastfm_api_key,
         })
     }
 }

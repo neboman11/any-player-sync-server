@@ -5,7 +5,9 @@ mod dj_fact_sources;
 mod dj_facts;
 mod errors;
 mod handlers;
+mod match_keys;
 mod models;
+mod passages;
 mod shutdown;
 mod state;
 mod ws;
@@ -16,7 +18,7 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     app::build_router,
@@ -298,7 +300,48 @@ async fn main() -> anyhow::Result<()> {
         "DJ voice catalog loaded"
     );
 
-    let state = Arc::new(AppContext::new(pool, dj_model_catalog, dj_voice_catalog));
+    let passages = match (
+        passages::schema::ensure(&pool).await?,
+        &config.dj_embedding_model_dir,
+    ) {
+        (false, _) => {
+            warn!("pgvector extension missing; DJ passages disabled");
+            None
+        }
+        (true, None) => {
+            warn!("DJ_EMBEDDING_MODEL_DIR not set; DJ passages disabled");
+            None
+        }
+        (true, Some(dir)) => {
+            let dir = dir.clone();
+            match tokio::task::spawn_blocking(move || passages::embed::BertEmbedder::load(&dir))
+                .await?
+            {
+                Ok(model) => Some(Arc::new(passages::Passages {
+                    embedder: Arc::new(model),
+                })),
+                Err(err) => {
+                    error!(%err, "failed to load DJ embedding model; DJ passages disabled");
+                    None
+                }
+            }
+        }
+    };
+    if let Some(engine) = &passages {
+        let sources = Arc::new(passages::sources::Sources::from_config(
+            config.lastfm_api_key.clone(),
+            config.genius_token.clone(),
+        ));
+        tokio::spawn(passages::worker::run(
+            pool.clone(),
+            engine.embedder.clone(),
+            sources,
+        ));
+        info!("DJ passage ingest worker started");
+    }
+
+    let state =
+        Arc::new(AppContext::new(pool, dj_model_catalog, dj_voice_catalog).with_passages(passages));
 
     let app = build_router(state, config.cors_allowed_origins, config.max_body_size);
 
