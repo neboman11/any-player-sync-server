@@ -14,6 +14,12 @@ use super::{
 use crate::match_keys::{artist_parts, base_title};
 use crate::passages::{MAX_BODY_BYTES, NewDocument, Subject, jobs::TrackRequest};
 
+pub fn search_url(song: &str) -> String {
+    let lower = song.to_lowercase();
+    let q = utf8_percent_encode(&lower, NON_ALPHANUMERIC);
+    format!("https://www.songfacts.com/search/songs/{q}")
+}
+
 pub struct Songfacts {
     http: SourceHttp,
 }
@@ -30,11 +36,7 @@ impl Songfacts {
             return Ok(vec![]);
         }
         let song = base_title(&track.song);
-        let q = utf8_percent_encode(song, NON_ALPHANUMERIC);
-        let search = self
-            .http
-            .get_text(&format!("https://www.songfacts.com/search/songs/{q}"))
-            .await?;
+        let search = self.http.get_text(&search_url(song)).await?;
         let Some((path, artist)) = find_result(&search, song, &track.artist) else {
             return Ok(vec![]);
         };
@@ -105,6 +107,30 @@ pub fn facts(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_url_lowercases_title() {
+        let url = search_url("Hotel California");
+        assert_eq!(
+            url,
+            "https://www.songfacts.com/search/songs/hotel%20california"
+        );
+    }
+
+    #[test]
+    fn search_url_handles_unicode() {
+        let url = search_url("星に願いを");
+        assert!(url.starts_with("https://www.songfacts.com/search/songs/"));
+        // Verify query part is percent-encoded (should contain % characters)
+        let query = url
+            .strip_prefix("https://www.songfacts.com/search/songs/")
+            .unwrap();
+        assert!(
+            query.contains('%'),
+            "Expected percent-encoded output but got: {}",
+            query
+        );
+    }
 
     #[test]
     fn finds_result_and_extracts_facts_without_comments() {
